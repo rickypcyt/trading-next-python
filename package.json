@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "concurrently --kill-others \"bun run dev:next\" \"bun run dev:backend\"",
+    "dev:next": "bun next dev",
+    "dev:backend": "cd backend && source venv/bin/activate && python -m uvicorn app:app --host 127.0.0.1 --port 5000 --reload",
+    "kill": "pkill -f 'uvicorn\\|next dev\\|python.*app.py' || true",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
@@ -11,7 +14,8 @@
   "dependencies": {
     "next": "16.1.6",
     "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "react-dom": "19.2.3",
+    "concurrently": "^9.1.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
