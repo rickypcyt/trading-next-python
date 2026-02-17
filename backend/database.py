@@ -18,10 +18,43 @@ class Trade(Base):
     timestamp_exit = Column(String)
     symbol = Column(String, index=True)
     strategy = Column(String)
-    entry_price = Column(Float)
-    exit_price = Column(Float)
+    
+    # Precios reales con Execution Engine
+    entry_price = Column(Float)  # Precio real de entrada
+    exit_price = Column(Float)    # Precio real de salida
+    requested_entry_price = Column(Float)  # Precio solicitado
+    requested_exit_price = Column(Float)    # Precio solicitado
+    
+    # Tamaño y P&L
     size = Column(Float)
-    pnl = Column(Float)
+    pnl = Column(Float)  # P&L neto (después de costos)
+    gross_pnl = Column(Float)  # P&L bruto (antes de costos)
+    
+    # Costos de ejecución
+    entry_fees = Column(Float)
+    exit_fees = Column(Float)
+    slippage_cost = Column(Float)
+    spread_cost = Column(Float)
+    total_costs = Column(Float)
+    
+    # Información de riesgo
+    stop_loss = Column(Float)
+    take_profit = Column(Float)
+    confidence = Column(Float)  # Confianza de la señal
+    volatility = Column(Float)  # Volatilidad al momento del trade
+    
+    # Metadatos del motor
+    source_engine = Column(String)  # intelligent, binance_mode, micro_profit
+    source_mode = Column(String)    # conservative, hybrid, aggressive
+    direction = Column(String)      # LONG, SHORT
+    
+    # Tiempos
+    duration_ms = Column(Integer)   # Duración en milisegundos
+    
+    # Estado y razón
+    entry_reason = Column(String)   # Razón de entrada
+    exit_reason = Column(String)    # Razón de salida
+    status = Column(String)         # executed, rejected, failed
 
 class EquityCurve(Base):
     __tablename__ = "equity_curve"

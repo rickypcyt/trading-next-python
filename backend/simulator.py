@@ -3,6 +3,8 @@ import math
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from database import Trade, EquityCurve, Metric, Alert
+from signal_interface import SimulationSignalEmitter
+from execution_engine import TradeDirection
 import asyncio
 
 class TradingSimulator:
@@ -14,8 +16,12 @@ class TradingSimulator:
         self.trades = []
         self.equity_history = []
         
-    def generate_simulated_trade(self):
-        """Genera un trade simulado realista"""
+        # Signal emitter para Portfolio Manager
+        self.signal_emitter = SimulationSignalEmitter(db)
+        self.signal_emitter.register_engine()
+        
+    async def generate_simulated_trade(self):
+        """Genera un trade simulado con Signal Emitter"""
         symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ADA/USDT', 'BNB/USDT', 'XRP/USDT']
         strategies = ['MA_Cross', 'RSI_Divergence', 'Bollinger_Bands', 'MACD_Signal']
         
@@ -38,39 +44,44 @@ class TradingSimulator:
         volatility = random.uniform(0.01, 0.05)  # 1-5% de volatilidad
         entry_price = base_price * (1 + random.uniform(-volatility, volatility))
         
-        # Tamaño de posición (1-5% del capital con $100 base = $1-$5)
-        position_size = self.current_capital * random.uniform(0.01, 0.05)
-        size = position_size / entry_price
+        # Dirección aleatoria del trade
+        direction = random.choice([TradeDirection.LONG, TradeDirection.SHORT])
         
-        # Determinar si es ganancia o pérdida (60% probabilidad de ganancia)
-        is_profit = random.random() < 0.6
-        
-        if is_profit:
-            profit_factor = random.uniform(0.5, 3.0)  # 0.5% a 3% de ganancia
-            pnl = position_size * profit_factor / 100
-            exit_price = entry_price * (1 + profit_factor / 100)
+        # Calcular stop loss basado en volatilidad
+        stop_distance_pct = max(0.01, volatility * 0.4)
+        if direction == TradeDirection.LONG:
+            stop_loss = entry_price * (1 - stop_distance_pct)
         else:
-            loss_factor = random.uniform(0.3, 2.0)  # 0.3% a 2% de pérdida
-            pnl = -position_size * loss_factor / 100
-            exit_price = entry_price * (1 - loss_factor / 100)
+            stop_loss = entry_price * (1 + stop_distance_pct)
         
-        # Timestamps
-        now = datetime.now()
-        entry_time = now - timedelta(minutes=random.randint(5, 60))
-        exit_time = now
+        # Calcular tamaño de posición (1-5% del capital)
+        position_value = self.current_capital * random.uniform(0.01, 0.05)
+        size = position_value / entry_price
         
-        trade = Trade(
-            timestamp_entry=entry_time.isoformat(),
-            timestamp_exit=exit_time.isoformat(),
+        # Emitir señal al Portfolio Manager
+        success = await self.signal_emitter.emit_trade_intent(
             symbol=symbol,
+            direction=direction,
+            entry_price=entry_price,
+            size=size,
+            stop_loss=stop_loss,
             strategy=strategy,
-            entry_price=round(entry_price, 2),
-            exit_price=round(exit_price, 2),
-            size=round(size, 6),
-            pnl=round(pnl, 2)
+            confidence=random.uniform(0.3, 0.8),
+            volatility=volatility * 100,
+            metadata={
+                'base_price': base_price,
+                'volatility_pct': volatility * 100,
+                'simulator_type': 'basic'
+            }
         )
         
-        return trade
+        if success:
+            print(f"✅ Simulation trade signal approved: {symbol} {strategy}")
+        else:
+            print(f"❌ Simulation trade signal rejected: {symbol} {strategy}")
+        
+        # Retornar None ya que el Portfolio Manager maneja la ejecución
+        return None
     
     def calculate_metrics(self):
         """Calcula métricas de rendimiento"""

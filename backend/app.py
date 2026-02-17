@@ -10,7 +10,10 @@ from simulator import TradingSimulator, run_periodic_simulation
 from binance_simulator import BinanceDataSimulator, run_real_time_simulation
 from binance_mode_simulator import BinanceModeSimulator, run_binance_mode_simulation, TRADING_MODES
 from intelligent_simulator import AdvancedTradingSimulator, run_intelligent_simulation
+from micro_profit_generator import MicroProfitGenerator, run_micro_profit_generator
 from monthly_target_simulator import MonthlyTargetSimulator, run_monthly_target_simulation
+from trade_logger import get_trade_logger
+from portfolio_manager import get_portfolio_manager
 
 app = FastAPI()
 
@@ -33,6 +36,9 @@ binance_mode_tasks = {}  # Tareas para cada modo
 intelligent_simulation_task = None
 monthly_target_task = None
 
+# Variable global para estrategias seleccionadas del Intelligent Simulator
+selected_intelligent_strategies = ['MACD_Signal', 'MA_Cross', 'RSI_Divergence', 'Bollinger_Bands', 'Volume_Breakout', 'Support_Resistance']
+
 
 def is_task_running(task):
     return task is not None and not task.done()
@@ -49,9 +55,16 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             await websocket.receive_text()  # Keep connection alive
     except WebSocketDisconnect:
-        websocket_connections.remove(websocket)
+        # Remover conexión de forma segura
+        if websocket in websocket_connections:
+            websocket_connections.remove(websocket)
         # Notificar que un cliente se desconectó
         await notify_clients(json.dumps({"type": "refresh", "message": "Client disconnected"}))
+    except Exception as e:
+        # Manejar otros errores de conexión
+        if websocket in websocket_connections:
+            websocket_connections.remove(websocket)
+        print(f"WebSocket error: {e}")
 
 async def notify_clients(message: str):
     """Notificar a todos los clientes conectados"""
@@ -252,18 +265,69 @@ def get_trades(db: Session = Depends(get_db)):
     trades = db.query(Trade).order_by(Trade.timestamp_entry.desc()).limit(50).all()
     return [
         {
+            # Información básica
             "id": trade.id,
             "timestamp_entry": trade.timestamp_entry,
             "timestamp_exit": trade.timestamp_exit,
             "symbol": trade.symbol,
             "strategy": trade.strategy,
-            "entry_price": trade.entry_price,
-            "exit_price": trade.exit_price,
-            "size": trade.size,
-            "pnl": trade.pnl
+            
+            # Precios detallados
+            "entry_price": trade.entry_price or 0.0,
+            "exit_price": trade.exit_price or 0.0,
+            "requested_entry_price": trade.requested_entry_price or 0.0,
+            "requested_exit_price": trade.requested_exit_price or 0.0,
+            
+            # Tamaño y P&L
+            "size": trade.size or 0.0,
+            "pnl": trade.pnl or 0.0,
+            "gross_pnl": trade.gross_pnl or 0.0,
+            "pnl_percentage": round((trade.pnl / (trade.entry_price * trade.size) * 100), 2) if trade.entry_price and trade.size and trade.pnl else 0,
+            
+            # Costos de ejecución
+            "entry_fees": trade.entry_fees or 0.0,
+            "exit_fees": trade.exit_fees or 0.0,
+            "slippage_cost": trade.slippage_cost or 0.0,
+            "spread_cost": trade.spread_cost or 0.0,
+            "total_costs": trade.total_costs or 0.0,
+            "cost_impact_pct": round((trade.total_costs / (trade.entry_price * trade.size) * 100), 2) if trade.entry_price and trade.size and trade.total_costs else 0,
+            
+            # Información de riesgo
+            "stop_loss": trade.stop_loss or 0.0,
+            "take_profit": trade.take_profit or 0.0,
+            "confidence": trade.confidence or 0.0,
+            "volatility": trade.volatility or 0.0,
+            
+            # Metadatos del motor
+            "source_engine": trade.source_engine or "unknown",
+            "source_mode": trade.source_mode or "unknown",
+            "direction": trade.direction or "UNKNOWN",
+            
+            # Tiempos
+            "duration_ms": trade.duration_ms or 0,
+            "duration_formatted": format_duration(trade.duration_ms or 0),
+            
+            # Estado y razón
+            "entry_reason": trade.entry_reason or "unknown",
+            "exit_reason": trade.exit_reason or "unknown",
+            "status": trade.status or "unknown"
         }
         for trade in trades
     ]
+
+def format_duration(duration_ms: int) -> str:
+    """Formatear duración en milisegundos a texto legible"""
+    if duration_ms == 0:
+        return "0m"
+    
+    seconds = duration_ms / 1000
+    minutes = int(seconds // 60)
+    remaining_seconds = int(seconds % 60)
+    
+    if minutes > 0:
+        return f"{minutes}m {remaining_seconds}s"
+    else:
+        return f"{remaining_seconds}s"
 
 @app.post('/trades')
 async def create_trade(
@@ -586,6 +650,128 @@ async def generate_intelligent_trade(db: Session = Depends(get_db)):
         else:
             return {"status": "error", "message": "Failed to generate intelligent trade"}
             
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.post('/intelligent/strategies')
+async def update_intelligent_strategies(request: dict):
+    """Actualizar estrategias seleccionadas para el Intelligent Simulator"""
+    try:
+        strategies = request.get('strategies', [])
+        
+        # Validar estrategias
+        valid_strategies = ['MACD_Signal', 'MA_Cross', 'RSI_Divergence', 'Bollinger_Bands', 'Volume_Breakout', 'Support_Resistance']
+        
+        # Filtrar solo estrategias válidas
+        filtered_strategies = [s for s in strategies if s in valid_strategies]
+        
+        # Guardar en variable global o configuración
+        # Por ahora, lo guardamos en una variable global (podría mejorarse con DB)
+        global selected_intelligent_strategies
+        selected_intelligent_strategies = filtered_strategies
+        
+        # Notificar cambio
+        await notify_clients(json.dumps({
+            "type": "intelligent_strategies_updated",
+            "data": {
+                "strategies": filtered_strategies,
+                "count": len(filtered_strategies)
+            }
+        }))
+        
+        return {
+            "status": "success", 
+            "strategies": filtered_strategies,
+            "message": f"Updated {len(filtered_strategies)} strategies"
+        }
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.post('/micro-profit/generate')
+async def generate_micro_profit(request: dict, db: Session = Depends(get_db)):
+    """Generar micro-trades seguros de ~$0.05 cada uno"""
+    try:
+        iterations = request.get('iterations', 5)  # Default 5 trades
+        
+        # Validar iteraciones
+        if iterations < 1 or iterations > 50:
+            return {"status": "error", "message": "Iterations must be between 1 and 50"}
+        
+        # Ejecutar micro-trading
+        result = await run_micro_profit_generator(iterations, db)
+        
+        if result['status'] == 'success':
+            # Notificar trades generados
+            await notify_clients(json.dumps({
+                "type": "micro_profit_generated",
+                "data": {
+                    "trades_generated": result['trades_generated'],
+                    "stats": result['stats'],
+                    "iterations": iterations,
+                    "timestamp": datetime.now().isoformat()
+                }
+            }))
+        
+        return result
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get('/micro-profit/stats')
+async def get_micro_profit_stats(db: Session = Depends(get_db)):
+    """Obtener estadísticas de micro-trading"""
+    try:
+        generator = MicroProfitGenerator(db)
+        stats = generator.get_micro_stats()
+        
+        return {
+            "status": "success",
+            "stats": stats,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get('/trades/active')
+async def get_active_trades(db: Session = Depends(get_db)):
+    """Obtener trades activos actualmente abiertos"""
+    try:
+        logger = get_trade_logger(db)
+        summary = logger.get_active_trades_summary()
+        
+        return {
+            "status": "success",
+            "data": summary,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get('/trades/log')
+async def get_trades_log(db: Session = Depends(get_db)):
+    """Obtener log de trades recientes"""
+    try:
+        # Leer últimas líneas del log
+        logs = []
+        try:
+            with open("trades_log.json", "r") as f:
+                lines = f.readlines()[-50:]  # Últimas 50 líneas
+                for line in lines:
+                    if line.strip():
+                        logs.append(json.loads(line.strip()))
+        except FileNotFoundError:
+            logs = []
+        
+        return {
+            "status": "success",
+            "logs": logs,
+            "count": len(logs),
+            "timestamp": datetime.now().isoformat()
+        }
+        
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -929,6 +1115,82 @@ async def generate_binance_mode_trade(mode: str, db: Session = Depends(get_db)):
         else:
             return {"status": "no_trade", "message": "No trade generated - risk limits reached"}
             
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# Portfolio Manager Endpoints
+@app.get('/portfolio/summary')
+def get_portfolio_summary(db: Session = Depends(get_db)):
+    """Obtener resumen completo del portfolio"""
+    try:
+        portfolio = get_portfolio_manager(db)
+        
+        # Configurar callback de notificación si no está configurado
+        if not portfolio.notify_callbacks:
+            portfolio.add_notify_callback(lambda data: notify_clients(data))
+        
+        return portfolio.get_portfolio_summary()
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.post('/portfolio/engine/{engine_name}/register')
+def register_engine(engine_name: str, db: Session = Depends(get_db)):
+    """Registrar un motor de trading"""
+    try:
+        portfolio = get_portfolio_manager(db)
+        portfolio.register_engine(engine_name)
+        
+        return {"status": "success", "message": f"Engine {engine_name} registered"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.post('/portfolio/engine/{engine_name}/unregister')
+def unregister_engine(engine_name: str, db: Session = Depends(get_db)):
+    """Desregistrar un motor de trading"""
+    try:
+        portfolio = get_portfolio_manager(db)
+        portfolio.unregister_engine(engine_name)
+        
+        return {"status": "success", "message": f"Engine {engine_name} unregistered"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get('/portfolio/signals')
+def get_signal_history(db: Session = Depends(get_db)):
+    """Obtener historial de señales del portfolio"""
+    try:
+        portfolio = get_portfolio_manager(db)
+        
+        # Retornar últimas 50 señales
+        recent_signals = portfolio.signal_history[-50:] if portfolio.signal_history else []
+        
+        return {
+            "signals": recent_signals,
+            "total_signals": len(portfolio.signal_history),
+            "active_engines": list(portfolio.active_engines)
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.post('/portfolio/limits/update')
+def update_portfolio_limits(request: dict, db: Session = Depends(get_db)):
+    """Actualizar límites del portfolio"""
+    try:
+        portfolio = get_portfolio_manager(db)
+        
+        # Actualizar límites si se proporcionan
+        if 'max_engine_exposure' in request:
+            portfolio.state.max_engine_exposure = request['max_engine_exposure']
+        if 'max_symbol_exposure' in request:
+            portfolio.state.max_symbol_exposure = request['max_symbol_exposure']
+        if 'max_total_exposure' in request:
+            portfolio.state.max_total_exposure = request['max_total_exposure']
+        if 'max_daily_loss' in request:
+            portfolio.state.max_daily_loss = request['max_daily_loss']
+        if 'max_drawdown_limit' in request:
+            portfolio.state.max_drawdown_limit = request['max_drawdown_limit']
+        
+        return {"status": "success", "message": "Portfolio limits updated"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 

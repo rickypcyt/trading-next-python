@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 from binance.client import Client
 from sqlalchemy.orm import Session
 from database import Trade, EquityCurve, Metric, Alert
+from execution_engine import execution_engine, TradeRequest, TradeDirection
 import asyncio
 import json
 import random
@@ -135,7 +136,7 @@ class AdvancedTradingSimulator:
         self.current_drawdown = max(0, (self.max_capital - self.current_capital) / self.max_capital * 100) if self.max_capital else 0
 
     def update_technical_analysis(self, symbol: str):
-        """Actualizar análisis técnico para un símbolo"""
+        """Actualizar análisis técnico mejorado para un símbolo"""
         data = self.price_manager.get_historical_data(symbol, '1h', 50)
         if not data:
             return
@@ -143,32 +144,117 @@ class AdvancedTradingSimulator:
         # Calcular indicadores básicos
         closes = [d['close'] for d in data]
         volumes = [d['volume'] for d in data]
+        highs = [d['high'] for d in data]
+        lows = [d['low'] for d in data]
         
-        # Medias móviles
+        # Medias móviles mejoradas
         sma_20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else closes[-1]
         sma_50 = sum(closes[-50:]) / 50 if len(closes) >= 50 else closes[-1]
+        ema_12 = self.calculate_ema(closes, 12)
+        ema_26 = self.calculate_ema(closes, 26)
         
-        # Volatilidad
+        # Volatilidad mejorada
         volatility = self.price_manager.calculate_volatility(data)
         
-        # Volumen promedio
+        # Volumen análisis mejorado
         avg_volume = sum(volumes[-10:]) / 10 if len(volumes) >= 10 else volumes[-1]
+        current_volume = volumes[-1] if volumes else avg_volume
+        volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1
         
-        # Tendencia
-        trend = 'bullish' if closes[-1] > sma_20 > sma_50 else 'bearish' if closes[-1] < sma_20 < sma_50 else 'sideways'
+        # Tendencia mejorada con múltiples confirmaciones
+        price_vs_sma20 = closes[-1] - sma_20
+        price_vs_sma50 = closes[-1] - sma_50
+        sma_trend = sma_20 - sma_50
+        
+        if price_vs_sma20 > 0 and price_vs_sma50 > 0 and sma_trend > 0:
+            trend = 'bullish'
+        elif price_vs_sma20 < 0 and price_vs_sma50 < 0 and sma_trend < 0:
+            trend = 'bearish'
+        else:
+            trend = 'sideways'
+        
+        # RSI simulado
+        rsi = self.calculate_rsi(closes, 14)
+        
+        # Soporte y resistencia dinámicos
+        resistance = max(highs[-20:]) if len(highs) >= 20 else highs[-1]
+        support = min(lows[-20:]) if len(lows) >= 20 else lows[-1]
+        
+        # Filtro de condición de mercado
+        market_condition = self.assess_market_condition(volatility, trend, rsi, volume_ratio)
         
         self.technical_data[symbol] = {
             'sma_20': sma_20,
             'sma_50': sma_50,
+            'ema_12': ema_12,
+            'ema_26': ema_26,
             'volatility': volatility,
             'avg_volume': avg_volume,
+            'current_volume': current_volume,
+            'volume_ratio': volume_ratio,
             'trend': trend,
-            'current_price': closes[-1],
-            'price_change_24h': ((closes[-1] - closes[0]) / closes[0]) * 100
+            'rsi': rsi,
+            'resistance': resistance,
+            'support': support,
+            'market_condition': market_condition,
+            'price_position': (closes[-1] - support) / (resistance - support) if resistance != support else 0.5,
+            'current_price': closes[-1]  # Agregar precio actual
         }
     
+    def calculate_ema(self, prices: List[float], period: int) -> float:
+        """Calcular EMA"""
+        if len(prices) < period:
+            return prices[-1] if prices else 0
+        
+        multiplier = 2 / (period + 1)
+        ema = prices[0]
+        
+        for price in prices[1:]:
+            ema = (price * multiplier) + (ema * (1 - multiplier))
+        
+        return ema
+    
+    def calculate_rsi(self, prices: List[float], period: int = 14) -> float:
+        """Calcular RSI simulado"""
+        if len(prices) < period + 1:
+            return 50
+        
+        gains = []
+        losses = []
+        
+        for i in range(1, len(prices)):
+            change = prices[i] - prices[i-1]
+            gains.append(change if change > 0 else 0)
+            losses.append(abs(change) if change < 0 else 0)
+        
+        avg_gain = sum(gains[-period:]) / period
+        avg_loss = sum(losses[-period:]) / period
+        
+        if avg_loss == 0:
+            return 100
+        
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        
+        return rsi
+    
+    def assess_market_condition(self, volatility: float, trend: str, rsi: float, volume_ratio: float) -> str:
+        """Evaluar condición general del mercado"""
+        if volatility > 4:
+            return 'high_volatility'
+        elif volatility < 1 and trend == 'sideways':
+            return 'low_activity'
+        elif rsi > 70 or rsi < 30:
+            return 'extreme_conditions'
+        elif volume_ratio > 2:
+            return 'high_volume'
+        elif trend in ['bullish', 'bearish'] and 1 < volatility < 3:
+            return 'trending_market'
+        else:
+            return 'normal'
+    
     def generate_intelligent_trade(self, symbol: str = None) -> Optional[Trade]:
-        """Generar trade inteligente basado en análisis técnico"""
+        """Generar trade inteligente con Execution Engine realista"""
         if symbol is None:
             symbol = random.choice(self.price_manager.symbols)
         
@@ -184,85 +270,200 @@ class AdvancedTradingSimulator:
         # Seleccionar estrategia basada en condiciones del mercado
         strategy = self.select_strategy(analysis)
         
-        # Calcular tamaño de posición basado en volatilidad
-        volatility_adjusted_size = self.max_position_size * (1 - analysis['volatility'] / 100)
-        position_size = self.current_capital * random.uniform(0.5, volatility_adjusted_size)
-        
         # Determinar dirección basada en análisis técnico
         direction = self.determine_direction(analysis, strategy)
         
-        # Calcular precios de entrada y salida
-        entry_price = current_price
+        # Calcular stop loss basado en volatilidad y análisis técnico
+        volatility = analysis['volatility'] / 100  # Convertir a decimal
+        support = analysis['support']
+        resistance = analysis['resistance']
+        
+        if direction == TradeDirection.LONG:
+            # Stop loss debajo de soporte o volatilidad
+            stop_loss = max(support * 0.98, current_price * (1 - max(0.02, volatility * 0.5)))
+        else:
+            # Stop loss encima de resistencia o volatilidad
+            stop_loss = min(resistance * 1.02, current_price * (1 + max(0.02, volatility * 0.5)))
+        
+        # Crear solicitud de trade
+        trade_request = TradeRequest(
+            symbol=symbol,
+            direction=direction,
+            entry_price=current_price,
+            size=0.0,  # Se calculará automáticamente
+            stop_loss=stop_loss,
+            strategy=strategy,
+            volatility=analysis['volatility']  # Ya está en porcentaje
+        )
+        
+        # Ejecutar trade con Execution Engine
+        trade_result = execution_engine.execute_trade(
+            trade_request, 
+            self.current_capital, 
+            risk_per_trade=0.02  # 2% de riesgo
+        )
+        
+        # Simular resultado basado en análisis técnico
+        success_probability = 0.65 + (analysis['market_condition']['confidence'] * 0.15)  # Realista: 65-80%
+        is_successful = random.random() < success_probability
+        
+        # Calcular movimiento de precio basado en volatilidad real
         base_movement = max(analysis['volatility'] / 100, 0.001)
         price_movement = random.uniform(base_movement * 0.5, base_movement * 1.5)
         price_movement = min(price_movement, 0.05)  # limitar 5%
         
-        if direction == 'long':
-            exit_price = entry_price * (1 + price_movement)
-            expected_pnl = position_size * price_movement
+        if is_successful:
+            # Ganancia basada en dirección
+            if direction == TradeDirection.LONG:
+                exit_price = current_price * (1 + price_movement)
+            else:
+                exit_price = current_price * (1 - price_movement)
         else:
-            exit_price = entry_price * (1 - price_movement)
-            expected_pnl = -position_size * price_movement
+            # Pérdida basada en dirección
+            if direction == TradeDirection.LONG:
+                exit_price = current_price * (1 - price_movement * 0.7)  # Pérdida menor que ganancia
+            else:
+                exit_price = current_price * (1 + price_movement * 0.7)
+        
+        # Simular tiempo de espera realista para el trade (10-120 segundos para trades inteligentes)
+        trade_duration_seconds = random.uniform(10, 120)
+        
+        # Crear timestamps con separación realista
+        entry_time = datetime.now()
+        exit_time = entry_time + timedelta(seconds=trade_duration_seconds)
+        
+        # Cerrar trade con Execution Engine
+        closed_trade = execution_engine.close_trade(
+            trade_result, 
+            exit_price, 
+            exit_reason="intelligent_simulation_close", 
+            volatility=analysis['volatility']
+        )
+        
+        # Sobrescribir timestamps para tener duración realista
+        closed_trade.timestamp_entry = entry_time
+        closed_trade.timestamp_exit = exit_time
         
         # Aplicar factor de riesgo basado en estrategia
         risk_factor = self.get_strategy_risk_factor(strategy)
-        final_pnl = expected_pnl * risk_factor
+        final_pnl = closed_trade.net_pnl * risk_factor
         
-        # Timestamps
-        now = datetime.now()
-        entry_time = now - timedelta(minutes=random.randint(1, 30))
-        exit_time = now
+        # Convertir a formato de base de datos
+        duration_ms = int((closed_trade.timestamp_exit - closed_trade.timestamp_entry).total_seconds() * 1000)
         
         trade = Trade(
-            timestamp_entry=entry_time.isoformat(),
-            timestamp_exit=exit_time.isoformat(),
-            symbol=symbol.replace('USDT', '/USD'),
-            strategy=strategy,
-            entry_price=round(entry_price, 2),
-            exit_price=round(exit_price, 2),
-            size=round(position_size / entry_price, 6),
-            pnl=round(final_pnl, 2)
+            timestamp_entry=closed_trade.timestamp_entry.isoformat(),
+            timestamp_exit=closed_trade.timestamp_exit.isoformat(),
+            symbol=closed_trade.symbol.replace('USDT', '/USD'),
+            strategy=closed_trade.strategy,
+            entry_price=round(closed_trade.actual_entry_price, 2),
+            exit_price=round(closed_trade.actual_exit_price, 2),
+            size=round(closed_trade.position_size, 6),
+            pnl=round(final_pnl, 2),
+            duration_ms=duration_ms,
+            entry_reason=closed_trade.entry_reason,
+            exit_reason=closed_trade.exit_reason,
+            source_engine="intelligent",
+            direction=closed_trade.direction.value,
+            status="executed"
         )
+        
+        # Guardar información de costos para análisis
+        execution_summary = execution_engine.get_execution_summary(closed_trade)
+        print(f"🧠 Intelligent Trade {symbol}: PnL=${final_pnl:.2f}, Costs=${execution_summary['total_costs']:.4f}")
         
         return trade
     
     def select_strategy(self, analysis: Dict) -> str:
-        """Seleccionar estrategia basada en condiciones del mercado"""
+        """Seleccionar estrategia basada en condiciones del mercado mejoradas"""
+        # Importar estrategias seleccionadas desde el backend
+        try:
+            import app
+            available_strategies = getattr(app, 'selected_intelligent_strategies', 
+                ['MACD_Signal', 'MA_Cross', 'RSI_Divergence', 'Bollinger_Bands', 'Volume_Breakout', 'Support_Resistance'])
+        except:
+            available_strategies = ['MACD_Signal', 'MA_Cross', 'RSI_Divergence', 'Bollinger_Bands', 'Volume_Breakout', 'Support_Resistance']
+        
         volatility = analysis['volatility']
         trend = analysis['trend']
-        volume = analysis['avg_volume']
+        rsi = analysis.get('rsi', 50)
+        market_condition = analysis.get('market_condition', 'normal')
+        volume_ratio = analysis.get('volume_ratio', 1)
         
-        # Estrategias para diferentes condiciones
-        if volatility > 3:  # Alta volatilidad
-            return random.choice(['Bollinger_Bands', 'Support_Resistance'])
-        elif trend == 'bullish':
-            return random.choice(['MA_Cross', 'Volume_Breakout'])
-        elif trend == 'bearish':
-            return random.choice(['RSI_Divergence', 'Support_Resistance'])
-        else:  # Lateral
-            return random.choice(['Bollinger_Bands', 'MACD_Signal'])
+        # Filtros inteligentes según condiciones del mercado
+        if market_condition == 'high_volatility':
+            # Alta volatilidad - estrategias conservadoras
+            candidates = ['Support_Resistance', 'RSI_Divergence']
+        elif market_condition == 'low_activity':
+            # Baja actividad - evitar trades
+            candidates = ['MA_Cross', 'MACD_Signal']  # Solo si hay tendencia clara
+        elif market_condition == 'extreme_conditions':
+            # Condiciones extremas RSI - reversiones
+            candidates = ['RSI_Divergence', 'Bollinger_Bands']
+        elif market_condition == 'trending_market':
+            # Mercado en tendencia - seguir tendencia
+            if trend == 'bullish':
+                candidates = ['MA_Cross', 'Volume_Breakout', 'MACD_Signal']
+            else:  # bearish
+                candidates = ['RSI_Divergence', 'Support_Resistance']
+        elif market_condition == 'high_volume':
+            # Alto volumen - breakout y momentum
+            candidates = ['Volume_Breakout', 'MACD_Signal', 'MA_Cross']
+        else:  # normal
+            # Condiciones normales - balanceado
+            if 30 < rsi < 70:  # RSI normal
+                if trend == 'bullish':
+                    candidates = ['MA_Cross', 'MACD_Signal', 'Volume_Breakout']
+                elif trend == 'bearish':
+                    candidates = ['RSI_Divergence', 'Support_Resistance']
+                else:  # sideways
+                    candidates = ['Bollinger_Bands', 'MACD_Signal', 'Support_Resistance']
+            else:  # RSI extremo
+                candidates = ['RSI_Divergence', 'Bollinger_Bands']
+        
+        # Filtrar solo las estrategias disponibles y seleccionadas
+        valid_candidates = [s for s in candidates if s in available_strategies]
+        
+        # Si no hay estrategias válidas, usar todas las disponibles
+        if not valid_candidates:
+            valid_candidates = available_strategies
+        
+        # Si no hay estrategias seleccionadas, usar todas por defecto
+        if not valid_candidates:
+            valid_candidates = ['MACD_Signal', 'MA_Cross', 'RSI_Divergence', 'Bollinger_Bands', 'Volume_Breakout', 'Support_Resistance']
+        
+        return random.choice(valid_candidates)
     
-    def determine_direction(self, analysis: Dict, strategy: str) -> str:
-        """Determinar dirección del trade basado en análisis y estrategia"""
-        # Factor de tendencia
-        trend_weight = 0.6 if analysis['trend'] == 'bullish' else -0.4 if analysis['trend'] == 'bearish' else 0
+    def determine_direction(self, analysis: Dict, strategy: str) -> TradeDirection:
+        """Determinar dirección del trade basado en análisis y estrategia mejorados"""
+        # Factor de tendencia (aumentado para más precisión)
+        trend_weight = 0.8 if analysis['trend'] == 'bullish' else -0.6 if analysis['trend'] == 'bearish' else 0
         
-        # Factor de volumen
-        volume_weight = 0.3 if analysis['avg_volume'] > analysis['avg_volume'] else -0.2
+        # Factor de volumen mejorado
+        current_volume = analysis.get('current_volume', analysis['avg_volume'])
+        volume_weight = 0.4 if current_volume > analysis['avg_volume'] * 1.2 else -0.3 if current_volume < analysis['avg_volume'] * 0.8 else 0
         
-        # Factor de estrategia
+        # Factor de estrategia optimizado para mayor win rate
         strategy_weights = {
-            'MA_Cross': 0.1,
-            'RSI_Divergence': -0.2,
-            'Bollinger_Bands': 0.0,
-            'MACD_Signal': 0.15,
-            'Volume_Breakout': 0.3,
-            'Support_Resistance': 0.0
+            'MA_Cross': 0.3,           # Aumentado - más confiable en tendencia
+            'RSI_Divergence': 0.2,     # Aumentado - mejor para reversiones
+            'Bollinger_Bands': 0.1,    # Reducido - menos confiable
+            'MACD_Signal': 0.25,       # Aumentado - buen momentum
+            'Volume_Breakout': 0.15,   # Reducido - más riesgoso
+            'Support_Resistance': 0.2  # Mantenido - confiable
         }
         
-        total_weight = trend_weight + volume_weight + strategy_weights.get(strategy, 0)
+        # Factor de volatilidad para ajustar decisión
+        volatility = analysis['volatility']
+        volatility_adjustment = -0.2 if volatility > 4 else 0.1 if volatility < 1 else 0
         
-        return 'long' if total_weight > 0 else 'short'
+        total_weight = trend_weight + volume_weight + strategy_weights.get(strategy, 0) + volatility_adjustment
+        
+        # Añadir umbral para evitar trades ambiguos
+        if abs(total_weight) < 0.1:
+            return TradeDirection.LONG if analysis['trend'] == 'bullish' else TradeDirection.SHORT if analysis['trend'] == 'bearish' else random.choice([TradeDirection.LONG, TradeDirection.SHORT])
+        
+        return TradeDirection.LONG if total_weight > 0 else TradeDirection.SHORT
     
     def get_strategy_risk_factor(self, strategy: str) -> float:
         """Obtener factor de riesgo para cada estrategia"""

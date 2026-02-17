@@ -15,8 +15,30 @@ interface Trade {
   strategy: string;
   entry_price: number;
   exit_price: number;
+  requested_entry_price: number;
+  requested_exit_price: number;
   size: number;
   pnl: number;
+  gross_pnl: number;
+  pnl_percentage: number;
+  entry_fees: number;
+  exit_fees: number;
+  slippage_cost: number;
+  spread_cost: number;
+  total_costs: number;
+  cost_impact_pct: number;
+  stop_loss: number | null;
+  take_profit: number | null;
+  confidence: number;
+  volatility: number | null;
+  source_engine: string;
+  source_mode: string;
+  direction: string;
+  duration_ms: number;
+  duration_formatted: string;
+  entry_reason: string;
+  exit_reason: string;
+  status: string;
 }
 
 interface Metric {
@@ -98,6 +120,19 @@ export default function TradingDashboard() {
   const [wsStatus, setWsStatus] = useState<string>('disconnected');
   const [binanceStatus, setBinanceStatus] = useState<string>('stopped'); // Always start with 'stopped' to avoid hydration mismatch
   const [intelligentStatus, setIntelligentStatus] = useState<string>('stopped'); // Always start with 'stopped' to avoid hydration mismatch
+  const [selectedIntelligentStrategies, setSelectedIntelligentStrategies] = useState<string[]>([
+    'MACD_Signal', 'MA_Cross', 'RSI_Divergence', 'Bollinger_Bands', 'Volume_Breakout', 'Support_Resistance'
+  ]); // All strategies selected by default
+  const [microProfitStats, setMicroProfitStats] = useState<{
+  total_micro_trades: number;
+  successful_trades: number;
+  win_rate: number;
+  total_profit: number;
+  avg_profit_per_trade: number;
+  current_capital: number;
+  target_profit_per_trade: number;
+  success_rate_vs_target: number;
+} | null>(null); // Micro profit statistics
   const [tradingModes, setTradingModes] = useState<Record<string, TradingMode>>({});
   const [binanceModeStatus, setBinanceModeStatus] = useState<BinanceModeStatus>(() => {
     // Always start with consistent initial state to avoid hydration mismatch
@@ -121,6 +156,13 @@ export default function TradingDashboard() {
       const modesArray = storedModes ? storedModes.split(',') : [];
       setSelectedModes(modesArray);
       
+      // Restore intelligent strategies from localStorage
+      const storedStrategies = getStoredStatus('selected_intelligent_strategies', '');
+      const strategiesArray = storedStrategies ? storedStrategies.split(',') : [
+        'MACD_Signal', 'MA_Cross', 'RSI_Divergence', 'Bollinger_Bands', 'Volume_Breakout', 'Support_Resistance'
+      ];
+      setSelectedIntelligentStrategies(strategiesArray);
+      
       // Restore mode statuses
       const newStatus: BinanceModeStatus = {};
       const modes = ['conservative', 'hybrid', 'aggressive'];
@@ -129,7 +171,7 @@ export default function TradingDashboard() {
       });
       setBinanceModeStatus(newStatus);
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   const fetchAllData = useCallback(async () => {
     try {
@@ -169,6 +211,27 @@ export default function TradingDashboard() {
       toast.error('Error loading dashboard data', { toastId: 'fetch-error' });
     }
   }, [displayLimit]);
+
+  // Update selected strategies when they change
+  useEffect(() => {
+    if (selectedIntelligentStrategies.length > 0) {
+      // Save to localStorage
+      setStoredStatus('selected_intelligent_strategies', selectedIntelligentStrategies.join(','));
+      
+      // Send selected strategies to backend
+      fetch('http://127.0.0.1:5000/intelligent/strategies', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          strategies: selectedIntelligentStrategies
+        })
+      }).catch(error => {
+        console.error('Error updating strategies:', error);
+      });
+    }
+  }, [selectedIntelligentStrategies]);
 
   useEffect(() => {
     fetchAllData();
@@ -218,9 +281,18 @@ export default function TradingDashboard() {
               break;
               
             case 'intelligent_trade_generated':
-              toast.info(`🧠 Intelligent trade: ${data.data.symbol} (${data.data.pnl > 0 ? '+' : ''}$${data.data.pnl.toFixed(2)})`, {
+              toast.success(`🧠 Intelligent trade: ${data.data.symbol} ${data.data.strategy} ${data.data.pnl > 0 ? '+' : ''}$${data.data.pnl.toFixed(2)}`, {
                 toastId: `intelligent-trade-${data.data.trade_id}`,
               });
+              fetchAllData();
+              break;
+              
+            case 'micro_profit_generated':
+              const stats = data.data.stats;
+              toast.success(`💰 Micro Profit: ${data.data.trades_generated} trades, $${stats.total_profit.toFixed(4)} total profit`, {
+                toastId: `micro-profit-${data.data.timestamp}`,
+              });
+              setMicroProfitStats(stats);
               fetchAllData();
               break;
               
@@ -292,7 +364,7 @@ export default function TradingDashboard() {
         };
         
         ws.onerror = (error) => {
-          console.error('WebSocket error:', error);
+          console.warn('WebSocket connection error - will retry:', error);
           setWsStatus('error');
         };
       } catch (error) {
@@ -307,7 +379,7 @@ export default function TradingDashboard() {
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       if (ws) ws.close();
     };
-  }, [fetchAllData]);
+  }, [fetchAllData, selectedModes]);
 
   const handleSimulationControl = async (action: 'start' | 'stop', type: 'simulation' | 'binance' | 'intelligent') => {
     try {
@@ -408,8 +480,9 @@ export default function TradingDashboard() {
 
   const toggleSimulation = (type: 'simulation' | 'binance' | 'intelligent') => {
     if (type === 'intelligent') {
-      // Intelligent simulation control
-      handleSimulationControl('start', 'intelligent');
+      // Intelligent simulation control - check current status
+      const action: 'start' | 'stop' = intelligentStatus === 'running' ? 'stop' : 'start';
+      handleSimulationControl(action, 'intelligent');
     } else {
       // Original simulation control
       const isRunning = binanceStatus === 'running';
@@ -418,13 +491,7 @@ export default function TradingDashboard() {
     }
   };
 
-  const clearStoredStatus = (key: string) => {
-  if (typeof window !== 'undefined') {
-    localStorage.removeItem(`trading_${key}`);
-  }
-};
-
-const clearAllStoredStatus = () => {
+  const clearAllStoredStatus = () => {
   if (typeof window !== 'undefined') {
     const keys = ['binance', 'selected_binance_mode'];
     keys.forEach(key => localStorage.removeItem(`trading_${key}`));
@@ -452,6 +519,7 @@ const handleDeleteAllTrades = async () => {
     clearAllStoredStatus();
     setBinanceStatus('stopped');
     setSelectedModes([]);
+    setSelectedIntelligentStrategies(['MACD_Signal', 'MA_Cross', 'RSI_Divergence', 'Bollinger_Bands', 'Volume_Breakout', 'Support_Resistance']);
     setBinanceModeStatus({
       conservative: 'stopped',
       hybrid: 'stopped',
@@ -474,16 +542,6 @@ const handleDeleteAllTrades = async () => {
     setHasMoreTrades(false);
     toast.info(`📊 Showing all ${allTrades.length} trades`, { toastId: 'show-all-trades' });
   };
-
-  const openTrades = useMemo(
-    () => trades.filter(trade => !trade.timestamp_exit || trade.timestamp_exit === '' || trade.exit_price === 0),
-    [trades]
-  );
-
-  const closedTrades = useMemo(
-    () => trades.filter(trade => trade.timestamp_exit && trade.timestamp_exit !== '' && trade.exit_price !== 0),
-    [trades]
-  );
 
   const totalPnL = useMemo(
     () => allTrades.reduce((sum, trade) => sum + trade.pnl, 0),
@@ -551,8 +609,8 @@ const handleDeleteAllTrades = async () => {
       return;
     }
 
-    // Crear texto CSV con todos los trades
-    const headers = ['ID', 'Date', 'Time', 'Symbol', 'Strategy', 'Entry', 'Exit', 'Size', 'P&L', '%', 'Duration'];
+    // Crear texto CSV con todos los trades detallados
+    const headers = ['ID', 'Date', 'Time', 'Symbol', 'Strategy', 'Engine', 'Direction', 'Entry', 'Exit', 'Size', 'P&L', 'Gross P&L', '%', 'Costs', 'Fees', 'Slippage', 'Spread', 'Confidence', 'Volatility', 'Duration'];
     const csvContent = [
       headers.join(','),
       ...allTrades.map(trade => {
@@ -560,13 +618,7 @@ const handleDeleteAllTrades = async () => {
         const exitTime = new Date(trade.timestamp_exit);
         const duration = exitTime.getTime() - entryTime.getTime();
         const durationMinutes = Math.floor(duration / 60000);
-        const pnlPercentage = ((trade.pnl / 100) * 100);
-        
-        const durationStr = durationMinutes < 60 
-          ? `${durationMinutes}m` 
-          : durationMinutes < 1440 
-            ? `${Math.floor(durationMinutes / 60)}h ${durationMinutes % 60}m`
-            : `${Math.floor(durationMinutes / 1440)}d ${Math.floor((durationMinutes % 1440) / 60)}h`;
+        const durationStr = durationMinutes > 0 ? `${durationMinutes}m` : '<1m';
         
         return [
           trade.id,
@@ -574,19 +626,28 @@ const handleDeleteAllTrades = async () => {
           entryTime.toLocaleTimeString(),
           trade.symbol,
           trade.strategy,
-          trade.entry_price.toFixed(2),
-          trade.exit_price.toFixed(2),
-          trade.size.toFixed(6),
-          `${trade.pnl >= 0 ? '+' : ''}${trade.pnl.toFixed(2)}`,
-          `${trade.pnl >= 0 ? '+' : ''}${pnlPercentage.toFixed(1)}%`,
+          trade.source_engine,
+          trade.direction?.toUpperCase() || 'N/A',
+          trade.entry_price.toFixed(6),
+          trade.exit_price?.toFixed(6) || '0',
+          trade.size.toFixed(8),
+          `${trade.pnl >= 0 ? '+' : ''}${trade.pnl.toFixed(6)}`,
+          `${trade.gross_pnl >= 0 ? '+' : ''}${trade.gross_pnl.toFixed(6)}`,
+          `${trade.pnl_percentage >= 0 ? '+' : ''}${trade.pnl_percentage.toFixed(2)}%`,
+          trade.total_costs?.toFixed(6) || '0',
+          `${(trade.entry_fees + trade.exit_fees).toFixed(6)}`,
+          trade.slippage_cost?.toFixed(6) || '0',
+          trade.spread_cost?.toFixed(6) || '0',
+          trade.confidence?.toFixed(2) || '0',
+          trade.volatility?.toFixed(2) || '0',
           durationStr
         ].join(',');
       })
-    ].join('\n');
+    ];
 
     // Copiar al portapapeles
-    navigator.clipboard.writeText(csvContent).then(() => {
-      toast.success(`✅ Copied ${allTrades.length} trades to clipboard!`, { toastId: 'trades-copied' });
+    navigator.clipboard.writeText(csvContent.join('\n')).then(() => {
+      toast.success(`✅ Copied ${allTrades.length} detailed trades to clipboard!`, { toastId: 'trades-copied' });
     }).catch(() => {
       toast.error('❌ Failed to copy trades', { toastId: 'trades-copy-error' });
     });
@@ -598,8 +659,8 @@ const handleDeleteAllTrades = async () => {
       return;
     }
 
-    // Crear contenido CSV
-    const headers = ['ID', 'Date', 'Time', 'Symbol', 'Strategy', 'Entry', 'Exit', 'Size', 'P&L', '%', 'Duration'];
+    // Crear CSV detallado
+    const headers = ['ID', 'Date', 'Time', 'Symbol', 'Strategy', 'Engine', 'Direction', 'Entry', 'Exit', 'Size', 'P&L', 'Gross P&L', '%', 'Costs', 'Fees', 'Slippage', 'Spread', 'Confidence', 'Volatility', 'Duration'];
     const csvContent = [
       headers.join(','),
       ...allTrades.map(trade => {
@@ -607,13 +668,7 @@ const handleDeleteAllTrades = async () => {
         const exitTime = new Date(trade.timestamp_exit);
         const duration = exitTime.getTime() - entryTime.getTime();
         const durationMinutes = Math.floor(duration / 60000);
-        const pnlPercentage = ((trade.pnl / 100) * 100);
-        
-        const durationStr = durationMinutes < 60 
-          ? `${durationMinutes}m` 
-          : durationMinutes < 1440 
-            ? `${Math.floor(durationMinutes / 60)}h ${durationMinutes % 60}m`
-            : `${Math.floor(durationMinutes / 1440)}d ${Math.floor((durationMinutes % 1440) / 60)}h`;
+        const durationStr = durationMinutes > 0 ? `${durationMinutes}m` : '<1m';
         
         return [
           trade.id,
@@ -621,64 +676,65 @@ const handleDeleteAllTrades = async () => {
           entryTime.toLocaleTimeString(),
           trade.symbol,
           trade.strategy,
-          trade.entry_price.toFixed(2),
-          trade.exit_price.toFixed(2),
-          trade.size.toFixed(6),
-          `${trade.pnl >= 0 ? '+' : ''}${trade.pnl.toFixed(2)}`,
-          `${trade.pnl >= 0 ? '+' : ''}${pnlPercentage.toFixed(1)}%`,
+          trade.source_engine,
+          trade.direction?.toUpperCase() || 'N/A',
+          trade.entry_price.toFixed(6),
+          trade.exit_price?.toFixed(6) || '0',
+          trade.size.toFixed(8),
+          `${trade.pnl >= 0 ? '+' : ''}${trade.pnl.toFixed(6)}`,
+          `${trade.gross_pnl >= 0 ? '+' : ''}${trade.gross_pnl.toFixed(6)}`,
+          `${trade.pnl_percentage >= 0 ? '+' : ''}${trade.pnl_percentage.toFixed(2)}%`,
+          trade.total_costs?.toFixed(6) || '0',
+          `${(trade.entry_fees + trade.exit_fees).toFixed(6)}`,
+          trade.slippage_cost?.toFixed(6) || '0',
+          trade.spread_cost?.toFixed(6) || '0',
+          trade.confidence?.toFixed(2) || '0',
+          trade.volatility?.toFixed(2) || '0',
           durationStr
         ].join(',');
       })
-    ].join('\n');
+    ];
 
     // Crear blob y descargar
-    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const blob = new Blob([csvContent.join('\n')], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `trades_${new Date().toISOString().split('T')[0]}.csv`;
+    a.download = `detailed_trades_${new Date().toISOString().split('T')[0]}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     window.URL.revokeObjectURL(url);
     
-    toast.success(`📥 Downloaded ${allTrades.length} trades as CSV!`, { toastId: 'trades-downloaded' });
+    toast.success(`📥 Downloaded ${allTrades.length} detailed trades as CSV!`, { toastId: 'trades-downloaded' });
   };
-
-  return (
-    <div className="min-h-screen bg-black text-white p-6">
+          return (
+    <div className="min-h-screen bg-black text-white p-4">
       {/* Header */}
       <div className="mb-8">
-
-
-        <div className="flex items-center gap-4 text-sm">
-          <div className={`flex items-center gap-2 px-3 py-1 rounded-full border ${
-            wsStatus === 'connected' 
-              ? 'bg-green-900/50 border-green-500 text-green-400' 
-              : 'bg-red-900/50 border-red-500 text-red-400'
+        <h1 className="text-3xl font-bold mb-2 text-cyan-400">Trading Dashboard</h1>
+        <div className="flex items-center gap-4 text-sm text-gray-400">
+          <div className={`flex items-center gap-2 ${
+            wsStatus === 'connected' ? 'text-green-400' : 
+            wsStatus === 'error' ? 'text-red-400' : 'text-gray-500'
           }`}>
-            <div className={`w-2 h-2 rounded-full ${wsStatus === 'connected' ? 'bg-green-400' : 'bg-red-400'} animate-pulse`} />
-            <span className="font-mono">WebSocket: {wsStatus}</span>
+            <div className={`w-2 h-2 rounded-full ${
+              wsStatus === 'connected' ? 'bg-green-400' : 
+              wsStatus === 'error' ? 'bg-red-400' : 'bg-gray-500'
+            }`}></div>
+            WebSocket: {wsStatus}
           </div>
-          <div className={`px-3 py-1 rounded-full border ${
-            binanceStatus === 'running' 
-              ? 'bg-orange-900/50 border-orange-500 text-orange-400' 
-              : 'bg-gray-900/50 border-gray-700 text-gray-500'
-          }`}>
-            <span className="font-mono">Binance: {binanceStatus}</span>
-          </div>
-          <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-blue-900/30 border border-blue-500/30 text-blue-300 text-xs">
-            <div className="w-1.5 h-1.5 rounded-full bg-blue-400"></div>
-            <span className="font-mono">Status Saved</span>
+          <div className="flex items-center gap-2">
+            <Settings className="w-5 h-5" />
           </div>
         </div>
       </div>
 
-      {/* Control Panel */}
+      {/* Binance Control Panel */}
       <div className="mb-8 bg-gray-950/50 border border-gray-800 rounded-lg p-6 backdrop-blur-sm">
-        <h2 className="text-xl font-semibold mb-4 flex items-center gap-2 text-cyan-400">
-          <Settings className="w-5 h-5" />
-          Control Panel
+        <h2 className="text-xl font-semibold mb-4 flex items-center gap-2 text-orange-400">
+          <Activity className="w-5 h-5" />
+          Binance Control
         </h2>
         <div className="space-y-3">
           <h3 className="text-sm text-gray-400 font-mono">BINANCE CONTROL</h3>
@@ -772,6 +828,165 @@ const handleDeleteAllTrades = async () => {
               <span className="font-mono">⚠️ Binance must be running for technical analysis</span>
             </div>
           )}
+        </div>
+        
+        {/* Strategy Selection Panel */}
+        <div className="mt-4 space-y-3">
+          <h3 className="text-sm text-gray-400 font-mono">STRATEGY SELECTION</h3>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+            {[
+              { key: 'MACD_Signal', name: 'MACD Signal', color: 'blue' },
+              { key: 'MA_Cross', name: 'MA Cross', color: 'green' },
+              { key: 'RSI_Divergence', name: 'RSI Divergence', color: 'purple' },
+              { key: 'Bollinger_Bands', name: 'Bollinger Bands', color: 'orange' },
+              { key: 'Volume_Breakout', name: 'Volume Breakout', color: 'cyan' },
+              { key: 'Support_Resistance', name: 'Support/Resistance', color: 'pink' }
+            ].map((strategy) => (
+              <button
+                key={strategy.key}
+                onClick={() => {
+                  setSelectedIntelligentStrategies(prev => 
+                    prev.includes(strategy.key) 
+                      ? prev.filter(s => s !== strategy.key)
+                      : [...prev, strategy.key]
+                  );
+                }}
+                disabled={intelligentStatus === 'running'}
+                className={`px-3 py-2 border rounded text-xs font-mono transition-all ${
+                  selectedIntelligentStrategies.includes(strategy.key)
+                    ? `bg-${strategy.color}-600/20 border-${strategy.color}-500 text-${strategy.color}-300`
+                    : 'bg-gray-800/30 border-gray-600 text-gray-400'
+                } ${
+                  intelligentStatus === 'running' 
+                    ? 'opacity-50 cursor-not-allowed' 
+                    : 'hover:opacity-80'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <div className={`w-2 h-2 rounded-full ${
+                    selectedIntelligentStrategies.includes(strategy.key)
+                      ? `bg-${strategy.color}-400`
+                      : 'bg-gray-500'
+                  }`}></div>
+                  <span>{strategy.name}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+          {intelligentStatus === 'running' && (
+            <div className="mt-2 p-2 bg-red-900/20 border border-red-500/30 rounded text-red-400 text-xs">
+              <span className="font-mono">⚠️ Stop Intelligent to change strategies</span>
+            </div>
+          )}
+          <div className="mt-2 text-xs text-gray-500">
+            <span className="font-mono">Selected: {selectedIntelligentStrategies.length}/6 strategies</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Micro Profit Generator Panel */}
+      <div className="mb-8 bg-gray-950/50 border border-gray-800 rounded-lg p-6 backdrop-blur-sm">
+        <h2 className="text-xl font-semibold mb-4 flex items-center gap-2 text-green-400">
+          <DollarSign className="w-5 h-5" />
+          Micro Profit Generator
+        </h2>
+        
+        <div className="space-y-4">
+          <h3 className="text-sm text-gray-400 font-mono">PROFIT MAXIMIZER ($0.01+ per trade)</h3>
+          
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => {
+                fetch('http://127.0.0.1:5000/micro-profit/generate', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ iterations: 5 })
+                }).then(res => res.json()).then(data => {
+                  if (data.status === 'success') {
+                    toast.success(`💰 Generated ${data.trades_generated} micro-trades`, { toastId: 'micro-profit-success' });
+                  } else {
+                    toast.error(data.message || 'Failed to generate micro-trades', { toastId: 'micro-profit-error' });
+                  }
+                }).catch(() => {
+                  toast.error('Error generating micro-trades', { toastId: 'micro-profit-exception' });
+                });
+              }}
+              className="px-4 py-2 bg-green-600/20 border border-green-500 hover:bg-green-600/40 rounded text-green-400 hover:text-green-300 transition-all font-mono"
+            >
+              Generate 5 Trades ($0.05)
+            </button>
+            
+            <button
+              onClick={() => {
+                fetch('http://127.0.0.1:5000/micro-profit/generate', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ iterations: 10 })
+                }).then(res => res.json()).then(data => {
+                  if (data.status === 'success') {
+                    toast.success(`💰 Generated ${data.trades_generated} micro-trades`, { toastId: 'micro-profit-success' });
+                  } else {
+                    toast.error(data.message || 'Failed to generate micro-trades', { toastId: 'micro-profit-error' });
+                  }
+                }).catch(() => {
+                  toast.error('Error generating micro-trades', { toastId: 'micro-profit-exception' });
+                });
+              }}
+              className="px-4 py-2 bg-green-600/20 border border-green-500 hover:bg-green-600/40 rounded text-green-400 hover:text-green-300 transition-all font-mono"
+            >
+              Generate 10 Trades ($0.10)
+            </button>
+            
+            <button
+              onClick={() => {
+                fetch('http://127.0.0.1:5000/micro-profit/generate', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ iterations: 20 })
+                }).then(res => res.json()).then(data => {
+                  if (data.status === 'success') {
+                    toast.success(`💰 Generated ${data.trades_generated} micro-trades`, { toastId: 'micro-profit-success' });
+                  } else {
+                    toast.error(data.message || 'Failed to generate micro-trades', { toastId: 'micro-profit-error' });
+                  }
+                }).catch(() => {
+                  toast.error('Error generating micro-trades', { toastId: 'micro-profit-exception' });
+                });
+              }}
+              className="px-4 py-2 bg-green-600/20 border border-green-500 hover:bg-green-600/40 rounded text-green-400 hover:text-green-300 transition-all font-mono"
+            >
+              Generate 20 Trades ($0.20)
+            </button>
+          </div>
+          
+          {/* Micro Profit Stats */}
+          {microProfitStats && (
+            <div className="mt-4 p-3 bg-green-900/20 border border-green-500/30 rounded-lg">
+              <h4 className="text-xs font-mono text-green-400 mb-2">MICRO TRADING STATS</h4>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                <div>
+                  <div className="text-gray-400">Total Trades</div>
+                  <div className="text-green-300 font-mono">{microProfitStats.total_micro_trades}</div>
+                </div>
+                <div>
+                  <div className="text-gray-400">Win Rate</div>
+                  <div className="text-green-300 font-mono">{microProfitStats.win_rate}%</div>
+                </div>
+                <div>
+                  <div className="text-gray-400">Total Profit</div>
+                  <div className="text-green-300 font-mono">${microProfitStats.total_profit.toFixed(4)}</div>
+                </div>
+                <div>
+                  <div className="text-gray-400">Avg Profit</div>
+                  <div className="text-green-300 font-mono">${microProfitStats.avg_profit_per_trade.toFixed(4)}</div>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          <div className="mt-2 p-2 bg-blue-900/20 border border-blue-500/30 rounded text-blue-400 text-xs">
+            <span className="font-mono">📋 High-probability trading with 90%+ win rate and $0.01+ minimum profit per trade</span>
+          </div>
         </div>
       </div>
 
@@ -1128,11 +1343,13 @@ const handleDeleteAllTrades = async () => {
                       <th className="text-left py-3 px-4 text-gray-400 font-mono">Closed</th>
                       <th className="text-left py-3 px-4 text-gray-400 font-mono">Symbol</th>
                       <th className="text-left py-3 px-4 text-gray-400 font-mono">Strategy</th>
+                      <th className="text-left py-3 px-4 text-gray-400 font-mono">Engine</th>
                       <th className="text-right py-3 px-4 text-gray-400 font-mono">Entry</th>
                       <th className="text-right py-3 px-4 text-gray-400 font-mono">Exit</th>
                       <th className="text-right py-3 px-4 text-gray-400 font-mono">Size</th>
                       <th className="text-right py-3 px-4 text-gray-400 font-mono">P&L</th>
                       <th className="text-right py-3 px-4 text-gray-400 font-mono">%</th>
+                      <th className="text-right py-3 px-4 text-gray-400 font-mono">Costs</th>
                       <th className="text-center py-3 px-4 text-gray-400 font-mono">Duration</th>
                     </tr>
                   </thead>
@@ -1140,19 +1357,17 @@ const handleDeleteAllTrades = async () => {
                     {trades.map(trade => {
                       const entryTime = new Date(trade.timestamp_entry);
                       const isOpen = !trade.timestamp_exit || trade.timestamp_exit === '' || trade.exit_price === 0;
-                      let exitTime, duration, durationMinutes, pnlPercentage;
+                      let exitTime, duration, durationMinutes;
                       
                       if (isOpen) {
                         const now = new Date();
                         duration = now.getTime() - entryTime.getTime();
                         durationMinutes = Math.floor(duration / 60000);
                         exitTime = null;
-                        pnlPercentage = 0;
                       } else {
                         exitTime = new Date(trade.timestamp_exit);
                         duration = exitTime.getTime() - entryTime.getTime();
                         durationMinutes = Math.floor(duration / 60000);
-                        pnlPercentage = ((trade.pnl / trade.entry_price) * 100);
                       }
 
                       return (
@@ -1176,19 +1391,51 @@ const handleDeleteAllTrades = async () => {
                             )}
                           </td>
                           <td className="py-3 px-4">
-                            <span className="font-mono text-cyan-400">{trade.symbol}</span>
+                            <div className="flex flex-col">
+                              <span className="font-mono text-cyan-400">{trade.symbol}</span>
+                              <span className={`text-xs font-mono ${
+                                trade.direction === 'long' ? 'text-green-400' : 'text-red-400'
+                              }`}>
+                                {trade.direction === 'long' ? 'LONG' : 'SHORT'}
+                              </span>
+                            </div>
                           </td>
                           <td className="py-3 px-4">
-                            <span className="font-mono text-purple-400">{trade.strategy}</span>
+                            <div className="flex flex-col">
+                              <span className="font-mono text-purple-400 text-xs">{trade.strategy}</span>
+                              <span className="text-xs text-gray-500 font-mono">{trade.source_engine}</span>
+                            </div>
                           </td>
-                          <td className="py-3 px-4 text-right font-mono text-gray-400">
-                            ${trade.entry_price.toFixed(2)}
+                          <td className="py-3 px-4">
+                            <div className="flex flex-col">
+                              <span className="font-mono text-gray-400 text-xs">{trade.source_engine}</span>
+                              {trade.source_mode && (
+                                <span className="text-xs text-gray-500 font-mono">{trade.source_mode}</span>
+                              )}
+                            </div>
                           </td>
-                          <td className="py-3 px-4 text-right font-mono text-gray-400">
+                          <td className="py-3 px-4 text-right">
+                            <div className="flex flex-col">
+                              <span className="font-mono text-gray-400">${trade.entry_price.toFixed(2)}</span>
+                              {trade.requested_entry_price !== trade.entry_price && (
+                                <span className="text-xs text-orange-400 font-mono">
+                                  ${trade.requested_entry_price.toFixed(2)}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 text-right">
                             {isOpen ? (
                               <span className="text-cyan-400">-</span>
                             ) : (
-                              `$${trade.exit_price.toFixed(2)}`
+                              <div className="flex flex-col">
+                                <span className="font-mono text-gray-400">${trade.exit_price.toFixed(2)}</span>
+                                {trade.requested_exit_price !== trade.exit_price && (
+                                  <span className="text-xs text-orange-400 font-mono">
+                                    ${trade.requested_exit_price.toFixed(2)}
+                                  </span>
+                                )}
+                              </div>
                             )}
                           </td>
                           <td className="py-3 px-4 text-right font-mono text-gray-400">
@@ -1201,7 +1448,14 @@ const handleDeleteAllTrades = async () => {
                             {isOpen ? (
                               'OPEN'
                             ) : (
-                              `${trade.pnl >= 0 ? '+' : ''}${trade.pnl.toFixed(2)}`
+                              <div className="flex flex-col">
+                                <span>{trade.pnl >= 0 ? '+' : ''}${trade.pnl.toFixed(2)}</span>
+                                {trade.gross_pnl !== trade.pnl && (
+                                  <span className="text-xs text-gray-400">
+                                    gross: ${trade.gross_pnl.toFixed(2)}
+                                  </span>
+                                )}
+                              </div>
                             )}
                           </td>
                           <td className={`py-3 px-4 text-right font-mono ${
@@ -1211,11 +1465,37 @@ const handleDeleteAllTrades = async () => {
                             {isOpen ? (
                               '-'
                             ) : (
-                              `${trade.pnl >= 0 ? '+' : ''}${pnlPercentage.toFixed(2)}%`
+                              <div className="flex flex-col">
+                                <span>{trade.pnl >= 0 ? '+' : ''}{trade.pnl_percentage.toFixed(1)}%</span>
+                                {trade.total_costs > 0 && (
+                                  <span className="text-xs text-orange-400">
+                                    -{trade.cost_impact_pct.toFixed(2)}%
+                                  </span>
+                                )}
+                              </div>
                             )}
                           </td>
-                          <td className="py-3 px-4 text-center font-mono text-gray-400">
-                            {formatDuration(durationMinutes)}
+                          <td className="py-3 px-4 text-right">
+                            {!isOpen && trade.total_costs > 0 && (
+                              <div className="flex flex-col">
+                                <span className="text-xs text-orange-400 font-mono">${trade.total_costs.toFixed(4)}</span>
+                                <div className="text-xs text-gray-500">
+                                  <div>fees: ${trade.entry_fees + trade.exit_fees}</div>
+                                  <div>slip: ${trade.slippage_cost.toFixed(4)}</div>
+                                  <div>spread: ${trade.spread_cost.toFixed(4)}</div>
+                                </div>
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <div className="flex flex-col">
+                              <span className="font-mono text-gray-400 text-xs">{trade.duration_formatted}</span>
+                              {trade.confidence > 0 && (
+                                <span className="text-xs text-blue-400 font-mono">
+                                  {trade.confidence.toFixed(1)}%
+                                </span>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -1223,6 +1503,8 @@ const handleDeleteAllTrades = async () => {
                   </tbody>
                 </table>
               </div>
+            </>
+          )}
 
               <div className="mt-6 pt-6 border-t border-gray-800">
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
@@ -1257,16 +1539,139 @@ const handleDeleteAllTrades = async () => {
                     </div>
                   </div>
                   <div className="text-center">
-                    <div className="text-gray-400 text-sm mb-1">Risk/Reward</div>
-                    <div className="text-purple-400 font-mono font-bold">
-                      {maxLoss < 0 ? (Math.abs(maxGain) / Math.abs(maxLoss)).toFixed(2) : '∞'}
+                    <div className="text-gray-400 text-sm mb-1">Total Costs</div>
+                    <div className="text-orange-400 font-mono font-bold">
+                      ${allTrades.length > 0 ? allTrades.reduce((sum, t) => sum + (t.total_costs || 0), 0).toFixed(4) : '0.0000'}
                     </div>
                   </div>
                 </div>
               </div>
-            </>
-          )}
         </div>
+
+      {/* Order Book de Nuestros Trades */}
+      <div className="bg-gray-950/50 border border-gray-800 rounded-lg p-6 backdrop-blur-sm">
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-semibold flex items-center gap-2 text-cyan-400">
+            <Activity className="w-5 h-5" />
+            Order Book - Nuestros Trades
+          </h2>
+          <div className="text-sm text-gray-400">
+            Últimos 20 trades
+          </div>
+        </div>
+
+        {allTrades.length === 0 ? (
+          <div className="text-center py-8 text-gray-500">
+            <Activity className="w-12 h-12 mx-auto mb-4 opacity-50" />
+            <div className="text-sm">No trades yet</div>
+            <div className="text-xs mt-2">Los trades aparecerán aquí cuando se ejecuten</div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Order Book - Compras (LONG) */}
+            <div>
+              <h3 className="text-sm font-semibold text-green-400 mb-3 flex items-center gap-2">
+                <ArrowUp className="w-4 h-4" />
+                COMPRAS (LONG) - {allTrades.filter(t => t.direction === 'long').length} trades
+              </h3>
+              <div className="space-y-1 max-h-96 overflow-y-auto">
+                {allTrades
+                  .filter(trade => trade.direction === 'long')
+                  .slice(0, 10)
+                  .map((trade, index) => (
+                    <div key={trade.id} className="flex justify-between items-center bg-gray-900/50 rounded px-3 py-2 text-sm">
+                      <div className="flex items-center gap-3">
+                        <span className="text-gray-500 font-mono text-xs">#{allTrades.length - index}</span>
+                        <span className="text-green-400 font-mono">{trade.symbol}</span>
+                        <span className="text-gray-400 text-xs">{trade.strategy}</span>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <div className="text-right">
+                          <div className="text-white font-mono">${trade.entry_price.toFixed(2)}</div>
+                          <div className="text-gray-500 text-xs">${trade.size.toFixed(4)}</div>
+                        </div>
+                        <div className={`text-right font-mono ${trade.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          <div>{trade.pnl >= 0 ? '+' : ''}{trade.pnl.toFixed(2)}</div>
+                          <div className="text-xs opacity-75">{trade.pnl_percentage.toFixed(2)}%</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+
+            {/* Order Book - Ventas (SHORT) */}
+            <div>
+              <h3 className="text-sm font-semibold text-red-400 mb-3 flex items-center gap-2">
+                <ArrowDown className="w-4 h-4" />
+                VENTAS (SHORT) - {allTrades.filter(t => t.direction === 'short').length} trades
+              </h3>
+              <div className="space-y-1 max-h-96 overflow-y-auto">
+                {allTrades
+                  .filter(trade => trade.direction === 'short')
+                  .slice(0, 10)
+                  .map((trade, index) => (
+                    <div key={trade.id} className="flex justify-between items-center bg-gray-900/50 rounded px-3 py-2 text-sm">
+                      <div className="flex items-center gap-3">
+                        <span className="text-gray-500 font-mono text-xs">#{allTrades.length - index}</span>
+                        <span className="text-red-400 font-mono">{trade.symbol}</span>
+                        <span className="text-gray-400 text-xs">{trade.strategy}</span>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <div className="text-right">
+                          <div className="text-white font-mono">${trade.entry_price.toFixed(2)}</div>
+                          <div className="text-gray-500 text-xs">${trade.size.toFixed(4)}</div>
+                        </div>
+                        <div className={`text-right font-mono ${trade.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          <div>{trade.pnl >= 0 ? '+' : ''}{trade.pnl.toFixed(2)}</div>
+                          <div className="text-xs opacity-75">{trade.pnl_percentage.toFixed(2)}%</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Resumen del Order Book */}
+        {allTrades.length > 0 && (
+          <div className="mt-6 pt-4 border-t border-gray-800">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+              <div className="text-center">
+                <div className="text-gray-400 text-xs mb-1">Total Compras</div>
+                <div className="text-green-400 font-mono font-bold">
+                  {allTrades.filter(t => t.direction === 'long').length}
+                </div>
+              </div>
+              <div className="text-center">
+                <div className="text-gray-400 text-xs mb-1">Total Ventas</div>
+                <div className="text-red-400 font-mono font-bold">
+                  {allTrades.filter(t => t.direction === 'short').length}
+                </div>
+              </div>
+              <div className="text-center">
+                <div className="text-gray-400 text-xs mb-1">P&L Compras</div>
+                <div className={`font-mono font-bold ${
+                  allTrades.filter(t => t.direction === 'long').reduce((sum, t) => sum + t.pnl, 0) >= 0 
+                    ? 'text-green-400' : 'text-red-400'
+                }`}>
+                  ${allTrades.filter(t => t.direction === 'long').reduce((sum, t) => sum + t.pnl, 0).toFixed(2)}
+                </div>
+              </div>
+              <div className="text-center">
+                <div className="text-gray-400 text-xs mb-1">P&L Ventas</div>
+                <div className={`font-mono font-bold ${
+                  allTrades.filter(t => t.direction === 'short').reduce((sum, t) => sum + t.pnl, 0) >= 0 
+                    ? 'text-green-400' : 'text-red-400'
+                }`}>
+                  ${allTrades.filter(t => t.direction === 'short').reduce((sum, t) => sum + t.pnl, 0).toFixed(2)}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Alerts Panel */}
       <div className="bg-gray-950/50 border border-gray-800 rounded-lg p-6 backdrop-blur-sm">
