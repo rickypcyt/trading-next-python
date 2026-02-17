@@ -39,6 +39,7 @@ interface Trade {
   entry_reason: string;
   exit_reason: string;
   status: string;
+  investment_amount: number;  // Nuevo campo: dinero invertido
 }
 
 interface Metric {
@@ -194,9 +195,13 @@ export default function TradingDashboard() {
       ]);
 
       // Guardar todos los trades y mostrar solo los primeros 50
-      setAllTrades(tradesData);
-      setTrades(tradesData.slice(0, displayLimit));
-      setHasMoreTrades(tradesData.length > displayLimit);
+      const processedTrades = tradesData.map((trade: Trade) => ({
+        ...trade,
+        investment_amount: trade.investment_amount || (trade.size * trade.entry_price)
+      }));
+      setAllTrades(processedTrades);
+      setTrades(processedTrades.slice(0, displayLimit));
+      setHasMoreTrades(processedTrades.length > displayLimit);
       
       setMetrics(metricsData[0] || null);
       setAlerts(alertsData);
@@ -610,7 +615,7 @@ const handleDeleteAllTrades = async () => {
     }
 
     // Crear texto CSV con todos los trades detallados
-    const headers = ['ID', 'Date', 'Time', 'Symbol', 'Strategy', 'Engine', 'Direction', 'Entry', 'Exit', 'Size', 'P&L', 'Gross P&L', '%', 'Costs', 'Fees', 'Slippage', 'Spread', 'Confidence', 'Volatility', 'Duration'];
+    const headers = ['ID', 'Date', 'Time', 'Symbol', 'Strategy', 'Engine', 'Direction', 'Entry', 'Exit', 'Size', 'Investment', 'P&L', 'Gross P&L', '%', 'Costs', 'Fees', 'Slippage', 'Spread', 'Confidence', 'Volatility', 'Duration'];
     const csvContent = [
       headers.join(','),
       ...allTrades.map(trade => {
@@ -631,6 +636,7 @@ const handleDeleteAllTrades = async () => {
           trade.entry_price.toFixed(6),
           trade.exit_price?.toFixed(6) || '0',
           trade.size.toFixed(8),
+          trade.investment_amount?.toFixed(2) || '0',
           `${trade.pnl >= 0 ? '+' : ''}${trade.pnl.toFixed(6)}`,
           `${trade.gross_pnl >= 0 ? '+' : ''}${trade.gross_pnl.toFixed(6)}`,
           `${trade.pnl_percentage >= 0 ? '+' : ''}${trade.pnl_percentage.toFixed(2)}%`,
@@ -1347,6 +1353,7 @@ const handleDeleteAllTrades = async () => {
                       <th className="text-right py-3 px-4 text-gray-400 font-mono">Entry</th>
                       <th className="text-right py-3 px-4 text-gray-400 font-mono">Exit</th>
                       <th className="text-right py-3 px-4 text-gray-400 font-mono">Size</th>
+                      <th className="text-right py-3 px-4 text-gray-400 font-mono">Investment</th>
                       <th className="text-right py-3 px-4 text-gray-400 font-mono">P&L</th>
                       <th className="text-right py-3 px-4 text-gray-400 font-mono">%</th>
                       <th className="text-right py-3 px-4 text-gray-400 font-mono">Costs</th>
@@ -1440,6 +1447,9 @@ const handleDeleteAllTrades = async () => {
                           </td>
                           <td className="py-3 px-4 text-right font-mono text-gray-400">
                             {trade.size.toFixed(6)}
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono text-blue-400">
+                            ${trade.investment_amount?.toFixed(2) || '0.00'}
                           </td>
                           <td className={`py-3 px-4 text-right font-bold font-mono ${
                             isOpen ? 'text-cyan-400' : 

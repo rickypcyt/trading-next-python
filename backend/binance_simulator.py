@@ -220,7 +220,8 @@ class BinanceDataSimulator(TradingSimulator):
             source_engine="binance_advanced",
             direction=closed_trade.direction.value,
             status="executed",
-            confidence=signal.confidence
+            confidence=signal.confidence,
+            investment_amount=round(closed_trade.position_size * closed_trade.actual_entry_price, 2)
         )
         
         # Guardar información de costos
@@ -374,7 +375,8 @@ class BinanceDataSimulator(TradingSimulator):
             source_engine="binance_basic",
             direction=closed_trade.direction.value,
             status="executed",
-            confidence=confidence
+            confidence=confidence,
+            investment_amount=round(closed_trade.position_size * closed_trade.actual_entry_price, 2)
         )
         
         return trade

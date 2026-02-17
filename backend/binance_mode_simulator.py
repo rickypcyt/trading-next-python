@@ -191,7 +191,8 @@ class BinanceModeSimulator(BinanceDataSimulator):
             status="executed",
             confidence=self.mode.win_rate,
             volatility=volatility * 100 if 'volatility' in locals() else 2.0,
-            duration_ms=int(duration_minutes * 60 * 1000)
+            duration_ms=int(duration_minutes * 60 * 1000),
+            investment_amount=round(position_size * entry_price, 2)
         )
         
         print(f"📊 [{self.mode.name}] Trade #{self.daily_trades}: {result} | PnL: ${pnl:+.2f} | Entry: ${entry_price:.2f} | Exit: ${exit_price:.2f} | Duration: {duration_minutes:.0f}m | Trend: {trend_factor:+.2f}")

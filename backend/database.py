@@ -51,6 +51,9 @@ class Trade(Base):
     # Tiempos
     duration_ms = Column(Integer)   # Duración en milisegundos
     
+    # Dinero invertido
+    investment_amount = Column(Float)  # Dinero total invertido en el trade
+    
     # Estado y razón
     entry_reason = Column(String)   # Razón de entrada
     exit_reason = Column(String)    # Razón de salida
