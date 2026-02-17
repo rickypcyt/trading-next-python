@@ -172,6 +172,9 @@ class BinanceModeSimulator(BinanceDataSimulator):
         entry_time = now - timedelta(minutes=hold_time)
         exit_time = now
         
+        # Calcular duración real
+        duration_minutes = (exit_time - entry_time).total_seconds() / 60
+        
         # Crear trade
         trade = Trade(
             timestamp_entry=entry_time.isoformat(),
@@ -181,11 +184,15 @@ class BinanceModeSimulator(BinanceDataSimulator):
             entry_price=round(entry_price, 2),
             exit_price=round(exit_price, 2),
             size=position_size,
-            pnl=pnl
+            pnl=pnl,
+            source_engine="binance_mode",
+            source_mode=self.mode.name.lower(),
+            direction="LONG",
+            status="executed",
+            confidence=self.mode.win_rate,
+            volatility=volatility * 100 if 'volatility' in locals() else 2.0,
+            duration_ms=int(duration_minutes * 60 * 1000)
         )
-        
-        # Calcular duración real
-        duration_minutes = (exit_time - entry_time).total_seconds() / 60
         
         print(f"📊 [{self.mode.name}] Trade #{self.daily_trades}: {result} | PnL: ${pnl:+.2f} | Entry: ${entry_price:.2f} | Exit: ${exit_price:.2f} | Duration: {duration_minutes:.0f}m | Trend: {trend_factor:+.2f}")
         

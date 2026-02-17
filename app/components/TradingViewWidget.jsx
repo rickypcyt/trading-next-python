@@ -55,6 +55,9 @@ function TradingViewWidget() {
               "BINANCE:ETHUSDT|1D"
             ],
             [
+              "BINANCE:BNBUSDT|1D"
+            ],
+            [
               "BINANCE:SOLUSDT|1D"
             ],
             [
