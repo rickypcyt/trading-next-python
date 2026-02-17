@@ -102,6 +102,7 @@ class AdvancedTradingSimulator:
         self.trades_count = 0
         self.winning_trades = 0
         self.losing_trades = 0
+        self._initialize_trading_state()
         
         # Estrategias disponibles
         self.strategies = [
@@ -116,6 +117,23 @@ class AdvancedTradingSimulator:
         # Análisis técnico
         self.technical_data = {}
     
+    def _initialize_trading_state(self):
+        """Inicializar métricas usando los trades históricos en la base"""
+        trades = self.db.query(Trade).order_by(Trade.timestamp_entry.asc()).all()
+        equity = self.initial_capital
+        max_equity = self.initial_capital
+
+        for trade in trades:
+            equity += trade.pnl
+            max_equity = max(max_equity, equity)
+
+        self.current_capital = equity
+        self.max_capital = max_equity
+        self.trades_count = len(trades)
+        self.winning_trades = len([t for t in trades if t.pnl > 0])
+        self.losing_trades = len([t for t in trades if t.pnl <= 0])
+        self.current_drawdown = max(0, (self.max_capital - self.current_capital) / self.max_capital * 100) if self.max_capital else 0
+
     def update_technical_analysis(self, symbol: str):
         """Actualizar análisis técnico para un símbolo"""
         data = self.price_manager.get_historical_data(symbol, '1h', 50)
@@ -175,7 +193,9 @@ class AdvancedTradingSimulator:
         
         # Calcular precios de entrada y salida
         entry_price = current_price
-        price_movement = random.uniform(0.001, 0.02)  # 0.1% - 2%
+        base_movement = max(analysis['volatility'] / 100, 0.001)
+        price_movement = random.uniform(base_movement * 0.5, base_movement * 1.5)
+        price_movement = min(price_movement, 0.05)  # limitar 5%
         
         if direction == 'long':
             exit_price = entry_price * (1 + price_movement)

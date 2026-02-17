@@ -28,6 +28,10 @@ simulation_task = None
 binance_simulation_task = None
 intelligent_simulation_task = None
 
+
+def is_task_running(task):
+    return task is not None and not task.done()
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -62,7 +66,7 @@ async def start_simulation():
     """Iniciar la simulación automática"""
     global simulation_task
     
-    if simulation_task and not simulation_task.done():
+    if is_task_running(simulation_task):
         return {"status": "already_running"}
     
     # Iniciar tarea de simulación en background
@@ -82,7 +86,7 @@ async def stop_simulation():
     """Detener la simulación automática"""
     global simulation_task
     
-    if simulation_task and not simulation_task.done():
+    if is_task_running(simulation_task):
         simulation_task.cancel()
         simulation_task = None
         
@@ -127,7 +131,7 @@ async def start_binance_simulation():
     """Iniciar simulación con datos reales de Binance"""
     global binance_simulation_task
     
-    if binance_simulation_task and not binance_simulation_task.done():
+    if is_task_running(binance_simulation_task):
         return {"status": "already_running"}
     
     # Iniciar tarea de simulación Binance en background
@@ -147,7 +151,7 @@ async def stop_binance_simulation():
     """Detener simulación de Binance"""
     global binance_simulation_task
     
-    if binance_simulation_task and not binance_simulation_task.done():
+    if is_task_running(binance_simulation_task):
         binance_simulation_task.cancel()
         binance_simulation_task = None
         
@@ -306,6 +310,25 @@ async def delete_trade(trade_id: int, db: Session = Depends(get_db)):
     
     return {"status": "success"}
 
+@app.delete('/trades')
+async def delete_all_trades(db: Session = Depends(get_db)):
+    try:
+        db.query(Trade).delete()
+        db.query(EquityCurve).delete()
+        db.query(Metric).delete()
+        db.query(Alert).delete()
+        db.commit()
+
+        await notify_clients(json.dumps({
+            "type": "trades_cleared",
+            "message": "All trades and related data cleared"
+        }))
+
+        return {"status": "success"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Equity Curve endpoints
 @app.get('/equity')
 def get_equity_curve(db: Session = Depends(get_db)):
@@ -431,7 +454,7 @@ async def start_intelligent_simulation():
     """Iniciar simulación inteligente con análisis técnico"""
     global intelligent_simulation_task
     
-    if intelligent_simulation_task and not intelligent_simulation_task.done():
+    if is_task_running(intelligent_simulation_task):
         return {"status": "already_running"}
     
     # Iniciar tarea de simulación inteligente en background
@@ -451,7 +474,7 @@ async def stop_intelligent_simulation():
     """Detener simulación inteligente"""
     global intelligent_simulation_task
     
-    if intelligent_simulation_task and not intelligent_simulation_task.done():
+    if is_task_running(intelligent_simulation_task):
         intelligent_simulation_task.cancel()
         intelligent_simulation_task = None
         
@@ -612,12 +635,21 @@ def get_system_stats(db: Session = Depends(get_db)):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-# Iniciar simulación automáticamente al arrancar
+# Endpoint para consultar el estado de las simulaciones
+@app.get('/status')
+def get_simulation_status():
+    return {
+        "simulation": "running" if is_task_running(simulation_task) else "stopped",
+        "binance": "running" if is_task_running(binance_simulation_task) else "stopped",
+        "intelligent": "running" if is_task_running(intelligent_simulation_task) else "stopped"
+    }
+
+
 @app.on_event("startup")
 async def startup_event():
-    """No iniciar simulación automática al arrancar el servidor"""
-    # Las simulaciones se inician manualmente desde el frontend
-    pass
+    """Inicialización del servidor sin iniciar simulaciones automáticamente"""
+    # Este hook queda para futuras inicializaciones necesarias.
+    return
 
 @app.on_event("shutdown")
 async def shutdown_event():

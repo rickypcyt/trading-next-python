@@ -16,7 +16,7 @@ class TradingSimulator:
         
     def generate_simulated_trade(self):
         """Genera un trade simulado realista"""
-        symbols = ['BTC/USD', 'ETH/USD', 'SPY', 'QQQ', 'AAPL']
+        symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ADA/USDT', 'BNB/USDT']
         strategies = ['MA_Cross', 'RSI_Divergence', 'Bollinger_Bands', 'MACD_Signal']
         
         symbol = random.choice(symbols)
@@ -24,11 +24,11 @@ class TradingSimulator:
         
         # Precios base según símbolo
         base_prices = {
-            'BTC/USD': 45000,
-            'ETH/USD': 3000,
-            'SPY': 450,
-            'QQQ': 380,
-            'AAPL': 180
+            'BTC/USDT': 45000,
+            'ETH/USDT': 3000,
+            'SOL/USDT': 90,
+            'ADA/USDT': 0.30,
+            'BNB/USDT': 320
         }
         
         base_price = base_prices[symbol]
