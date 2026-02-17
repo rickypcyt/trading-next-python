@@ -11,7 +11,7 @@ class BinanceDataSimulator(TradingSimulator):
     def __init__(self, db: Session):
         super().__init__(db)
         self.binance_client = None
-        self.symbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'SOLUSDT']
+        self.symbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'SOLUSDT', 'XRPUSDT']
         
     def initialize_binance(self):
         """Inicializar cliente de Binance (puede usar datos públicos sin API keys)"""
