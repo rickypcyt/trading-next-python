@@ -186,4 +186,4 @@ async def run_real_time_simulation(db_factory, notify_clients):
         except Exception as e:
             print(f"Error in real-time simulation: {e}")
         
-        await asyncio.sleep(10)  # Esperar 10 segundos (más lento para datos reales)
+        await asyncio.sleep(30)  # Esperar 30 segundos (más lento para datos reales)

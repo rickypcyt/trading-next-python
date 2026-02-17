@@ -3,11 +3,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import json
 import asyncio
+from datetime import datetime
 from typing import List, Dict, Any
 from database import get_db, Trade, EquityCurve, Metric, Alert
 from simulator import TradingSimulator, run_periodic_simulation
 from binance_simulator import BinanceDataSimulator, run_real_time_simulation
+from binance_mode_simulator import BinanceModeSimulator, run_binance_mode_simulation, TRADING_MODES
 from intelligent_simulator import AdvancedTradingSimulator, run_intelligent_simulation
+from monthly_target_simulator import MonthlyTargetSimulator, run_monthly_target_simulation
 
 app = FastAPI()
 
@@ -26,7 +29,9 @@ websocket_connections = set()
 # Variable global para el bucle de simulación
 simulation_task = None
 binance_simulation_task = None
+binance_mode_tasks = {}  # Tareas para cada modo
 intelligent_simulation_task = None
+monthly_target_task = None
 
 
 def is_task_running(task):
@@ -149,18 +154,31 @@ async def start_binance_simulation():
 @app.post('/binance/stop')
 async def stop_binance_simulation():
     """Detener simulación de Binance"""
-    global binance_simulation_task
+    global binance_simulation_task, binance_mode_tasks
     
     if is_task_running(binance_simulation_task):
         binance_simulation_task.cancel()
         binance_simulation_task = None
         
+        # Detener todos los modos de Binance automáticamente
+        stopped_modes = []
+        for mode, task in binance_mode_tasks.items():
+            if is_task_running(task):
+                task.cancel()
+                stopped_modes.append(mode)
+        
+        # Limpiar tareas de modos
+        binance_mode_tasks.clear()
+        
         await notify_clients(json.dumps({
             "type": "binance_simulation_stopped",
-            "message": "Binance simulation stopped"
+            "message": "Binance simulation stopped",
+            "data": {
+                "stopped_modes": stopped_modes
+            }
         }))
         
-        return {"status": "stopped"}
+        return {"status": "stopped", "stopped_modes": stopped_modes}
     else:
         return {"status": "not_running"}
 
@@ -638,10 +656,23 @@ def get_system_stats(db: Session = Depends(get_db)):
 # Endpoint para consultar el estado de las simulaciones
 @app.get('/status')
 def get_simulation_status():
+    binance_running = is_task_running(binance_simulation_task)
+    
     return {
         "simulation": "running" if is_task_running(simulation_task) else "stopped",
-        "binance": "running" if is_task_running(binance_simulation_task) else "stopped",
-        "intelligent": "running" if is_task_running(intelligent_simulation_task) else "stopped"
+        "binance": "running" if binance_running else "stopped",
+        "intelligent": "running" if is_task_running(intelligent_simulation_task) else "stopped",
+        "monthly_target": "running" if is_task_running(monthly_target_task) else "stopped",
+        "binance_modes": {
+            mode: {
+                "status": "running" if is_task_running(task) else "stopped",
+                "can_run": binance_running  # Indica si puede running dado el estado de Binance principal
+            }
+            for mode, task in binance_mode_tasks.items()
+        },
+        "dependencies": {
+            "binance_modes_require_binance": True
+        }
     }
 
 
@@ -654,7 +685,7 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Detener simulación al apagar el servidor"""
-    global simulation_task, binance_simulation_task, intelligent_simulation_task
+    global simulation_task, binance_simulation_task, intelligent_simulation_task, monthly_target_task, binance_mode_tasks
     
     if simulation_task and not simulation_task.done():
         simulation_task.cancel()
@@ -664,6 +695,242 @@ async def shutdown_event():
     
     if intelligent_simulation_task and not intelligent_simulation_task.done():
         intelligent_simulation_task.cancel()
+    
+    if monthly_target_task and not monthly_target_task.done():
+        monthly_target_task.cancel()
+    
+    # Detener todos los modos
+    for mode, task in binance_mode_tasks.items():
+        if task and not task.done():
+            task.cancel()
+
+# Monthly Target Simulation Endpoints
+@app.post('/monthly/start')
+async def start_monthly_target_simulation():
+    """Iniciar simulación optimizada para 20% mensual"""
+    global monthly_target_task
+    
+    if is_task_running(monthly_target_task):
+        return {"status": "already_running"}
+    
+    # Iniciar tarea de simulación mensual en background
+    monthly_target_task = asyncio.create_task(
+        run_monthly_target_simulation(get_db, lambda data: notify_clients(json.dumps(data)))
+    )
+    
+    await notify_clients(json.dumps({
+        "type": "monthly_target_started",
+        "message": "Monthly target simulation started (20% monthly goal)"
+    }))
+    
+    return {"status": "started"}
+
+@app.post('/monthly/stop')
+async def stop_monthly_target_simulation():
+    """Detener simulación mensual"""
+    global monthly_target_task
+    
+    if is_task_running(monthly_target_task):
+        monthly_target_task.cancel()
+        monthly_target_task = None
+        
+        await notify_clients(json.dumps({
+            "type": "monthly_target_stopped",
+            "message": "Monthly target simulation stopped"
+        }))
+        
+        return {"status": "stopped"}
+    else:
+        return {"status": "not_running"}
+
+@app.post('/monthly/generate')
+async def generate_monthly_target_trade(db: Session = Depends(get_db)):
+    """Genera un trade optimizado para 20% mensual"""
+    from datetime import datetime
+    
+    simulator = MonthlyTargetSimulator(db)
+    
+    try:
+        trade = simulator.generate_monthly_target_trade()
+        
+        if trade:
+            db.add(trade)
+            db.commit()
+            db.refresh(trade)
+            
+            # Actualizar capital
+            simulator.current_capital += trade.pnl
+            simulator.max_capital = max(simulator.max_capital, simulator.current_capital)
+            
+            # Actualizar equity
+            equity = EquityCurve(
+                timestamp=datetime.now().isoformat(),
+                capital=round(simulator.current_capital, 2)
+            )
+            db.merge(equity)
+            db.commit()
+            
+            await notify_clients(json.dumps({
+                "type": "monthly_target_trade_generated",
+                "message": f"Monthly target trade: {trade.symbol} (${trade.pnl:+.2f})",
+                "data": {
+                    "trade_id": trade.id,
+                    "symbol": trade.symbol,
+                    "strategy": trade.strategy,
+                    "pnl": trade.pnl,
+                    "capital": equity.capital,
+                    "daily_trades": simulator.daily_trades,
+                    "daily_pnl": simulator.daily_pnl,
+                    "consecutive_losses": simulator.consecutive_losses,
+                    "monthly_progress": (simulator.current_capital - 100) / 20,
+                    "source": "monthly_target_manual"
+                }
+            }))
+            
+            return {"status": "success", "data": {
+                "trade_id": trade.id,
+                "symbol": trade.symbol,
+                "pnl": trade.pnl,
+                "strategy": trade.strategy,
+                "source": "monthly_target"
+            }}
+        else:
+            return {"status": "no_trade", "message": "No trade generated - risk limits reached"}
+            
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# Binance Mode Simulation Endpoints
+@app.get('/binance/modes')
+def get_trading_modes():
+    """Obtener modos de trading disponibles"""
+    return {
+        "modes": {
+            mode: {
+                "name": config.name,
+                "risk_percentage": config.risk_percentage,
+                "win_rate": config.win_rate,
+                "reward_risk_ratio": config.reward_risk_ratio,
+                "max_consecutive_losses": config.max_consecutive_losses,
+                "trades_per_hour": config.trades_per_hour
+            }
+            for mode, config in TRADING_MODES.items()
+        }
+    }
+
+@app.post('/binance/mode/{mode}/start')
+async def start_binance_mode_simulation(mode: str):
+    """Iniciar simulación Binance con modo específico"""
+    global binance_mode_tasks, binance_simulation_task
+    
+    if mode not in TRADING_MODES:
+        raise HTTPException(status_code=400, detail=f"Modo '{mode}' no válido. Modos disponibles: {list(TRADING_MODES.keys())}")
+    
+    # Verificar que la simulación principal de Binance esté running
+    if not is_task_running(binance_simulation_task):
+        return {"status": "error", "message": "La simulación principal de Binance no está running. Inicie Binance primero."}
+    
+    if mode in binance_mode_tasks and is_task_running(binance_mode_tasks[mode]):
+        return {"status": "already_running", "mode": mode}
+    
+    # Iniciar tarea de simulación en background
+    binance_mode_tasks[mode] = asyncio.create_task(
+        run_binance_mode_simulation(get_db, lambda data: notify_clients(json.dumps(data)), mode)
+    )
+    
+    await notify_clients(json.dumps({
+        "type": "binance_mode_started",
+        "message": f"Binance simulation started in {TRADING_MODES[mode].name} mode",
+        "data": {
+            "mode": mode,
+            "mode_name": TRADING_MODES[mode].name,
+            "risk_percentage": TRADING_MODES[mode].risk_percentage
+        }
+    }))
+    
+    return {"status": "started", "mode": mode, "mode_name": TRADING_MODES[mode].name}
+
+@app.post('/binance/mode/{mode}/stop')
+async def stop_binance_mode_simulation(mode: str):
+    """Detener simulación Binance de modo específico"""
+    global binance_mode_tasks
+    
+    if mode not in binance_mode_tasks:
+        return {"status": "not_running", "mode": mode}
+    
+    if is_task_running(binance_mode_tasks[mode]):
+        binance_mode_tasks[mode].cancel()
+        del binance_mode_tasks[mode]
+        
+        await notify_clients(json.dumps({
+            "type": "binance_mode_stopped",
+            "message": f"Binance simulation stopped for {TRADING_MODES[mode].name} mode",
+            "data": {"mode": mode}
+        }))
+        
+        return {"status": "stopped", "mode": mode}
+    else:
+        return {"status": "not_running", "mode": mode}
+
+@app.post('/binance/mode/{mode}/generate')
+async def generate_binance_mode_trade(mode: str, db: Session = Depends(get_db)):
+    """Genera un trade con modo específico de Binance"""
+    if mode not in TRADING_MODES:
+        raise HTTPException(status_code=400, detail=f"Modo '{mode}' no válido")
+    
+    simulator = BinanceModeSimulator(db, mode)
+    
+    try:
+        trade = simulator.generate_mode_trade()
+        
+        if trade:
+            db.add(trade)
+            db.commit()
+            db.refresh(trade)
+            
+            # Actualizar capital
+            simulator.current_capital += trade.pnl
+            simulator.max_capital = max(simulator.max_capital, simulator.current_capital)
+            
+            # Actualizar equity
+            equity = EquityCurve(
+                timestamp=datetime.now().isoformat(),
+                capital=round(simulator.current_capital, 2)
+            )
+            db.merge(equity)
+            db.commit()
+            
+            await notify_clients(json.dumps({
+                "type": "binance_mode_trade_generated",
+                "message": f"Binance {TRADING_MODES[mode].name} trade: {trade.symbol} (${trade.pnl:+.2f})",
+                "data": {
+                    "trade_id": trade.id,
+                    "symbol": trade.symbol,
+                    "strategy": trade.strategy,
+                    "pnl": trade.pnl,
+                    "capital": equity.capital,
+                    "mode": TRADING_MODES[mode].name,
+                    "risk_percentage": TRADING_MODES[mode].risk_percentage,
+                    "daily_trades": simulator.daily_trades,
+                    "daily_pnl": simulator.daily_pnl,
+                    "consecutive_losses": simulator.consecutive_losses,
+                    "source": f"binance_{mode}_manual"
+                }
+            }))
+            
+            return {"status": "success", "data": {
+                "trade_id": trade.id,
+                "symbol": trade.symbol,
+                "pnl": trade.pnl,
+                "strategy": trade.strategy,
+                "mode": TRADING_MODES[mode].name,
+                "source": f"binance_{mode}"
+            }}
+        else:
+            return {"status": "no_trade", "message": "No trade generated - risk limits reached"}
+            
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 if __name__ == '__main__':
     import uvicorn

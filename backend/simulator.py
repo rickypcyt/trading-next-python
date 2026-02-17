@@ -225,10 +225,21 @@ async def run_periodic_simulation(db_factory, notify_clients):
                         "alerts_count": len(result["alerts"])
                     }
                 })
+                
+                # Notificar actualización de equity
+                await notify_clients({
+                    "type": "equity_updated",
+                    "message": f"Capital updated: ${result['equity'].capital}",
+                    "data": {
+                        "timestamp": result["equity"].timestamp,
+                        "capital": result["equity"].capital,
+                        "trade_pnl": result["trade"].pnl
+                    }
+                })
             
             db.close()
             
         except Exception as e:
             print(f"Error in periodic simulation: {e}")
         
-        await asyncio.sleep(5)  # Esperar 5 segundos para el siguiente ciclo
+        await asyncio.sleep(15)  # Esperar 15 segundos para el siguiente ciclo

@@ -49,8 +49,13 @@ La lógica de señales vive en `TradingStrategies`, utilizada por el motor avanz
 
 > Nota: El simulador básico asigna la estrategia como etiqueta descriptiva, mientras que las reglas determinísticas provienen del motor `TradingStrategies` y los pesos de riesgo del simulador inteligente.
 
-## Glosario
+-## Glosario
 
+- **SMA (Simple Moving Average / Media móvil simple):** promedio aritmético de los precios de cierre de un período; se usa para identificar tendencia y como referencia en cruces. @backend/trading_engine.py#167-195
+- **EMA (Exponential Moving Average / Media móvil exponencial):** promedio ponderado que da mayor importancia a precios recientes; base del indicador MACD. @backend/trading_engine.py#63-88
+- **MACD (Moving Average Convergence Divergence):** indicador de momentum que compara dos EMAs y genera señales con la línea de señal y el histograma. @backend/trading_engine.py#215-256
+- **RSI (Relative Strength Index / Índice de Fuerza Relativa):** oscilador que mide la velocidad del movimiento de precio entre 0-100 para detectar sobrecompra/sobreventa. @backend/trading_engine.py#124-161
+- **Bandas de Bollinger:** envolventes alrededor de una SMA que usan desviación estándar para estimar rangos de precio y volatilidad. @backend/trading_engine.py#262-303
 - **Capital inicial / capital actual:** monto base con el que arranca cada simulador y que se va ajustando tras cada trade ejecutado. @backend/simulator.py#9-172 @backend/intelligent_simulator.py#95-310
 - **PnL (Profit and Loss):** beneficio o pérdida generado por el trade; se calcula a partir de la diferencia entre precio de entrada y salida multiplicada por el tamaño de la posición. @backend/trading_engine.py#381-386 @backend/binance_simulator.py#78-124
 - **Equity curve:** historial del capital acumulado a lo largo del tiempo; se persiste tras cada ciclo de simulación para graficar la evolución. @backend/simulator.py#152-177 @backend/intelligent_simulator.py#307-314

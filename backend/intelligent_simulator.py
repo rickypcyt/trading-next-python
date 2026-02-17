@@ -509,4 +509,4 @@ async def run_intelligent_simulation(db_factory, notify_clients):
         except Exception as e:
             print(f"❌ Error in intelligent simulation: {e}")
         
-        await asyncio.sleep(8)  # Intervalo de 8 segundos
+        await asyncio.sleep(20)  # Intervalo de 20 segundos
