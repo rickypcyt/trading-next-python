@@ -14,6 +14,8 @@ from micro_profit_generator import MicroProfitGenerator, run_micro_profit_genera
 from monthly_target_simulator import MonthlyTargetSimulator, run_monthly_target_simulation
 from trade_logger import get_trade_logger
 from portfolio_manager import get_portfolio_manager
+from engine_manager import engine_manager
+from engine_endpoints import register_engine_endpoints
 
 app = FastAPI()
 
@@ -25,6 +27,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Registrar endpoints de engines
+register_engine_endpoints(app)
 
 # WebSocket connections
 websocket_connections = set()
@@ -864,15 +869,22 @@ def get_simulation_status():
 
 @app.on_event("startup")
 async def startup_event():
-    """Inicialización del servidor sin iniciar simulaciones automáticamente"""
-    # Este hook queda para futuras inicializaciones necesarias.
+    """Inicialización del servidor y del Engine Manager"""
+    global engine_manager
+    
+    # Inicializar el Engine Manager
+    await engine_manager.initialize(notification_callback=notify_clients)
+    
+    print("🚀 Trading system initialized with Engine Manager")
+    print(f"📊 Available engines: {list(engine_manager.engines.keys())}")
     return
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Detener simulación al apagar el servidor"""
-    global simulation_task, binance_simulation_task, intelligent_simulation_task, monthly_target_task, binance_mode_tasks
+    """Detener todas las simulaciones y engines al apagar el servidor"""
+    global simulation_task, binance_simulation_task, intelligent_simulation_task, monthly_target_task, binance_mode_tasks, engine_manager
     
+    # Detener tareas antiguas
     if simulation_task and not simulation_task.done():
         simulation_task.cancel()
     
@@ -885,12 +897,16 @@ async def shutdown_event():
     if monthly_target_task and not monthly_target_task.done():
         monthly_target_task.cancel()
     
-    # Detener todos los modos
+    # Detener tareas de modos Binance
     for mode, task in binance_mode_tasks.items():
         if task and not task.done():
             task.cancel()
+    
+    # Apagar el Engine Manager
+    await engine_manager.shutdown()
+    
+    print("🛑 All systems shut down gracefully")
 
-# Monthly Target Simulation Endpoints
 @app.post('/monthly/start')
 async def start_monthly_target_simulation():
     """Iniciar simulación optimizada para 20% mensual"""

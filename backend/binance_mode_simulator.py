@@ -4,6 +4,7 @@ Modos de trading para Binance con diferentes niveles de riesgo
 """
 from binance_simulator import BinanceDataSimulator
 from database import get_db, Trade, EquityCurve, Metric, Alert
+from signal_interface import BinanceModeSignalEmitter
 from datetime import datetime, timedelta
 import random
 import asyncio
@@ -55,6 +56,10 @@ class BinanceModeSimulator(BinanceDataSimulator):
         self.hourly_trades = 0
         self.last_trade_hour = datetime.now().hour
         
+        # Inicializar SignalEmitter para comunicación con Portfolio Manager
+        self.signal_emitter = BinanceModeSignalEmitter(db, mode)
+        self.signal_emitter.register_engine()
+        
     def should_trade(self):
         """Verificar si se debe operar según el modo"""
         # Verificar pérdidas consecutivas
@@ -77,8 +82,71 @@ class BinanceModeSimulator(BinanceDataSimulator):
         risk_amount = self.current_capital * self.mode.risk_percentage
         return risk_amount
     
+    async def generate_mode_trade_with_portfolio(self):
+        """Generar trade usando el Portfolio Manager"""
+        can_trade, reason = self.should_trade()
+        
+        if not can_trade:
+            print(f"🚫 [{self.mode.name}] No trading: {reason}")
+            return None
+        
+        position_size = self.calculate_position_size()
+        
+        # Obtener precio real de Binance
+        market_data = self.get_real_price_data('BTCUSDT')
+        
+        if market_data:
+            base_price = market_data['current_price']
+            volatility = market_data.get('volatility', 0.02)
+            
+            # Simular movimiento de precio
+            price_movement = random.uniform(-volatility, volatility) * 0.5
+            entry_price = base_price * (1 + price_movement)
+            
+            # Calcular stop loss y take profit según modo
+            if self.mode.name == "Conservador":
+                stop_loss = entry_price * (1 - self.mode.risk_percentage)
+                take_profit = entry_price * (1 + self.mode.risk_percentage * self.mode.reward_risk_ratio)
+            elif self.mode.name == "Híbrido":
+                stop_loss = entry_price * (1 - self.mode.risk_percentage)
+                take_profit = entry_price * (1 + self.mode.risk_percentage * self.mode.reward_risk_ratio)
+            else:  # Agresivo
+                stop_loss = entry_price * (1 - self.mode.risk_percentage)
+                take_profit = entry_price * (1 + self.mode.risk_percentage * self.mode.reward_risk_ratio)
+            
+            # Enviar señal al Portfolio Manager
+            success = await self.signal_emitter.emit_mode_trade_intent(
+                symbol="BTC/USDT",
+                direction="LONG",
+                entry_price=entry_price,
+                size=position_size,
+                stop_loss=stop_loss,
+                strategy=f"Binance {self.mode.name}",
+                confidence=self.mode.win_rate,
+                volatility=volatility * 100,
+                metadata={
+                    "mode": self.mode.name.lower(),
+                    "risk_percentage": self.mode.risk_percentage,
+                    "expected_return": self.mode.reward_risk_ratio
+                }
+            )
+            
+            if success:
+                # Actualizar contadores
+                self.daily_trades += 1
+                self.hourly_trades += 1
+                
+                print(f"✅ [{self.mode.name}] Trade signal sent to portfolio: {position_size:.2f} @ ${entry_price:.2f}")
+                return True
+            else:
+                print(f"❌ [{self.mode.name}] Trade rejected by portfolio manager")
+                return None
+        else:
+            print(f"❌ [{self.mode.name}] No market data available")
+            return None
+    
     def generate_mode_trade(self):
-        """Generar trade según el modo seleccionado"""
+        """Generar trade según el modo seleccionado (método original para compatibilidad)"""
         can_trade, reason = self.should_trade()
         
         if not can_trade:

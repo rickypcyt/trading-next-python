@@ -1,9 +1,10 @@
 'use client';
 
-import { Activity, AlertTriangle, ArrowDown, ArrowUp, Bell, Copy, DollarSign, Download, Pause, Play, Settings, TrendingDown, TrendingUp } from 'lucide-react';
+import { Activity, AlertTriangle, ArrowDown, ArrowUp, Bell, Copy, DollarSign, Download, Settings, TrendingDown, TrendingUp } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import EngineControlPanel from './components/EngineControlPanel';
 import TradingViewWidget from './components/TradingViewWidget';
 import { toast } from 'react-toastify';
 
@@ -91,6 +92,7 @@ const getStoredStatus = (key: string, defaultValue: string) => {
   return defaultValue;
 };
 
+
 const setStoredStatus = (key: string, value: string) => {
   if (typeof window !== 'undefined') {
     localStorage.setItem(`trading_${key}`, value);
@@ -119,11 +121,11 @@ export default function TradingDashboard() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [equityData, setEquityData] = useState<EquityPoint[]>([]);
   const [wsStatus, setWsStatus] = useState<string>('disconnected');
-  const [binanceStatus, setBinanceStatus] = useState<string>('stopped'); // Always start with 'stopped' to avoid hydration mismatch
-  const [intelligentStatus, setIntelligentStatus] = useState<string>('stopped'); // Always start with 'stopped' to avoid hydration mismatch
+  const [binanceStatus, setBinanceStatus] = useState<'running' | 'stopped'>('stopped');
+  const [intelligentStatus, setIntelligentStatus] = useState<'running' | 'stopped'>('stopped');
   const [selectedIntelligentStrategies, setSelectedIntelligentStrategies] = useState<string[]>([
     'MACD_Signal', 'MA_Cross', 'RSI_Divergence', 'Bollinger_Bands', 'Volume_Breakout', 'Support_Resistance'
-  ]); // All strategies selected by default
+  ]);
   const [microProfitStats, setMicroProfitStats] = useState<{
   total_micro_trades: number;
   successful_trades: number;
@@ -150,20 +152,24 @@ export default function TradingDashboard() {
   useEffect(() => {
     // Only run on client side and only once on mount
     if (typeof window !== 'undefined') {
-      setBinanceStatus(getStoredStatus('binance', 'stopped'));
-      
+      const storedBinance = getStoredStatus('binance', 'stopped');
+      setBinanceStatus(storedBinance === 'running' ? 'running' : 'stopped');
+
       // Restore selected modes from localStorage
       const storedModes = getStoredStatus('selected_binance_modes', '');
       const modesArray = storedModes ? storedModes.split(',') : [];
       setSelectedModes(modesArray);
-      
+
       // Restore intelligent strategies from localStorage
       const storedStrategies = getStoredStatus('selected_intelligent_strategies', '');
       const strategiesArray = storedStrategies ? storedStrategies.split(',') : [
         'MACD_Signal', 'MA_Cross', 'RSI_Divergence', 'Bollinger_Bands', 'Volume_Breakout', 'Support_Resistance'
       ];
       setSelectedIntelligentStrategies(strategiesArray);
-      
+
+      const storedIntelligent = getStoredStatus('intelligent', 'stopped');
+      setIntelligentStatus(storedIntelligent === 'running' ? 'running' : 'stopped');
+
       // Restore mode statuses
       const newStatus: BinanceModeStatus = {};
       const modes = ['conservative', 'hybrid', 'aggressive'];
@@ -386,36 +392,7 @@ export default function TradingDashboard() {
     };
   }, [fetchAllData, selectedModes]);
 
-  const handleSimulationControl = async (action: 'start' | 'stop', type: 'simulation' | 'binance' | 'intelligent') => {
-    try {
-      let endpoint;
-      if (type === 'simulation') {
-        endpoint = '/simulation';
-      } else if (type === 'binance') {
-        endpoint = '/binance';
-      } else if (type === 'intelligent') {
-        endpoint = '/intelligent';
-      }
-      
-      const response = await fetch(`http://127.0.0.1:5000${endpoint}/${action}`, { method: 'POST' });
-      const result = await response.json();
-      
-      if (result.status === 'already_running') {
-        toast.info(`${type} is already running`, { toastId: `${type}-already-running` });
-        if (type === 'binance') setBinanceStatus('running');
-        return;
-      }
-
-      if (['started', 'stopped'].includes(result.status)) {
-        const newStatus = result.status === 'started' ? 'running' : 'stopped';
-        setBinanceStatus(newStatus);
-        setStoredStatus('binance', newStatus);
-      }
-    } catch {
-      toast.error(`Error controlling ${type}`, { toastId: `${type}-control-error` });
-    }
-  };
-
+  
   const handleBinanceModeControl = async (action: 'select' | 'generate', mode: string) => {
     try {
       if (action === 'select') {
@@ -483,19 +460,57 @@ export default function TradingDashboard() {
     }
   };
 
-  const toggleSimulation = (type: 'simulation' | 'binance' | 'intelligent') => {
-    if (type === 'intelligent') {
-      // Intelligent simulation control - check current status
-      const action: 'start' | 'stop' = intelligentStatus === 'running' ? 'stop' : 'start';
-      handleSimulationControl(action, 'intelligent');
-    } else {
-      // Original simulation control
-      const isRunning = binanceStatus === 'running';
-      const action: 'start' | 'stop' = isRunning ? 'stop' : 'start';
-      handleSimulationControl(action, type);
+  const handleGenerateBinanceTrade = useCallback(async () => {
+    try {
+      const response = await fetch('http://127.0.0.1:5000/binance/generate', { method: 'POST' });
+      if (!response.ok) throw new Error('Failed to generate Binance trade');
+      await response.json().catch(() => null);
+      toast.success('⚡ Binance trade generated', { toastId: 'binance-trade-generated' });
+      fetchAllData();
+    } catch (error) {
+      console.error('Error generating Binance trade:', error);
+      toast.error('Error generating Binance trade', { toastId: 'binance-trade-error' });
     }
-  };
+  }, [fetchAllData]);
 
+  const handleGenerateIntelligentTrade = useCallback(async () => {
+    try {
+      const response = await fetch('http://127.0.0.1:5000/intelligent/generate', { method: 'POST' });
+      if (!response.ok) throw new Error('Failed to generate intelligent trade');
+      await response.json().catch(() => null);
+      toast.success('🧠 Intelligent trade generated', { toastId: 'intelligent-trade-generated' });
+      fetchAllData();
+    } catch (error) {
+      console.error('Error generating intelligent trade:', error);
+      toast.error('Error generating intelligent trade', { toastId: 'intelligent-trade-error' });
+    }
+  }, [fetchAllData]);
+
+  const handleGenerateMicroProfit = useCallback(async (iterations: number) => {
+    try {
+      const response = await fetch('http://127.0.0.1:5000/micro-profit/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ iterations }),
+      });
+      const data = await response.json();
+
+      if (response.ok && data.status === 'success') {
+        toast.success(`💰 Generated ${data.trades_generated} micro-trades`, { toastId: 'micro-profit-success' });
+        if (data.stats) {
+          setMicroProfitStats(data.stats);
+        }
+        fetchAllData();
+      } else {
+        toast.error(data.message || 'Failed to generate micro-trades', { toastId: 'micro-profit-error' });
+      }
+    } catch (error) {
+      console.error('Error generating micro trades:', error);
+      toast.error('Error generating micro-trades', { toastId: 'micro-profit-exception' });
+    }
+  }, [fetchAllData, setMicroProfitStats]);
+
+  
   const clearAllStoredStatus = () => {
   if (typeof window !== 'undefined') {
     const keys = ['binance', 'selected_binance_mode'];
@@ -594,19 +609,6 @@ const handleDeleteAllTrades = async () => {
       return acc;
     }, {});
   }, [alerts]);
-
-  const formatDuration = (minutes: number) => {
-    if (minutes < 0) return '0m';
-    if (minutes < 60) return `${minutes}m`;
-    if (minutes < 1440) {
-      const hours = Math.floor(minutes / 60);
-      const mins = minutes % 60;
-      return `${hours}h ${mins}m`;
-    }
-    const days = Math.floor(minutes / 1440);
-    const hours = Math.floor((minutes % 1440) / 60);
-    return `${days}d ${hours}h`;
-  };
 
   const copyAllTrades = () => {
     if (allTrades.length === 0) {
@@ -736,379 +738,22 @@ const handleDeleteAllTrades = async () => {
         </div>
       </div>
 
-      {/* Binance Control Panel */}
-      <div className="mb-8 bg-gray-950/50 border border-gray-800 rounded-lg p-6 backdrop-blur-sm">
-        <h2 className="text-xl font-semibold mb-4 flex items-center gap-2 text-orange-400">
-          <Activity className="w-5 h-5" />
-          Binance Control
-        </h2>
-        <div className="space-y-3">
-          <h3 className="text-sm text-gray-400 font-mono">BINANCE CONTROL</h3>
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={() => toggleSimulation('binance')}
-              className={`px-4 py-2 border rounded flex items-center gap-2 transition-all font-mono ${
-                binanceStatus === 'running'
-                  ? 'bg-red-600/20 border-red-500 hover:bg-red-600/40 text-red-400 hover:text-red-300'
-                  : 'bg-orange-600/20 border-orange-500 hover:bg-orange-600/40 text-orange-400 hover:text-orange-300'
-              }`}
-            >
-              {binanceStatus === 'running' ? (
-                <>
-                  <Pause className="w-4 h-4" />
-                  Stop Binance
-                </>
-              ) : (
-                <>
-                  <Play className="w-4 h-4" />
-                  Start Binance
-                </>
-              )}
-            </button>
-            <button
-              onClick={() => fetch('http://127.0.0.1:5000/binance/generate', { method: 'POST' })}
-              className="px-4 py-2 bg-yellow-600/20 border border-yellow-500 hover:bg-yellow-600/40 rounded text-yellow-400 hover:text-yellow-300 transition-all"
-            >
-              Binance Trade
-            </button>
-            <button
-              onClick={handleDeleteAllTrades}
-              className="px-4 py-2 bg-red-700/20 border border-red-600 hover:bg-red-700/40 rounded text-red-400 hover:text-red-300 transition-all font-mono"
-            >
-              Clear Trades
-            </button>
-            <button
-              onClick={handleClearAllStatus}
-              className="px-4 py-2 bg-gray-600/20 border border-gray-500 hover:bg-gray-600/40 rounded text-gray-400 hover:text-gray-300 transition-all font-mono"
-            >
-              Reset Status
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Intelligent Trading Panel */}
-      <div className="mb-8 bg-gray-950/50 border border-gray-800 rounded-lg p-6 backdrop-blur-sm">
-        <h2 className="text-xl font-semibold mb-4 flex items-center gap-2 text-purple-400">
-          <TrendingUp className="w-5 h-5" />
-          Intelligent Trading
-        </h2>
-        <div className="space-y-3">
-          <h3 className="text-sm text-gray-400 font-mono">TECHNICAL ANALYSIS CONTROL</h3>
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={() => toggleSimulation('intelligent')}
-              className={`px-4 py-2 border rounded flex items-center gap-2 transition-all font-mono ${
-                intelligentStatus === 'running'
-                  ? 'bg-red-600/20 border-red-500 hover:bg-red-600/40 text-red-400 hover:text-red-300'
-                  : binanceStatus === 'running'
-                    ? 'bg-purple-600/20 border-purple-500 hover:bg-purple-600/40 text-purple-400 hover:text-purple-300'
-                    : 'bg-gray-600/20 border-gray-500 hover:bg-gray-600/40 text-gray-400 hover:text-gray-300'
-              }`}
-              disabled={binanceStatus !== 'running'}
-            >
-              {intelligentStatus === 'running' ? (
-                <>
-                  <Pause className="w-4 h-4" />
-                  Stop Intelligent
-                </>
-              ) : (
-                <>
-                  <Play className="w-4 h-4" />
-                  Start Intelligent
-                </>
-              )}
-            </button>
-            <button
-              onClick={() => fetch('http://127.0.0.1:5000/intelligent/generate', { method: 'POST' })}
-              disabled={binanceStatus !== 'running'}
-              className={`px-4 py-2 bg-purple-600/20 border border-purple-500 hover:bg-purple-600/40 rounded text-purple-400 hover:text-purple-300 transition-all ${
-                binanceStatus !== 'running' ? 'opacity-50 cursor-not-allowed' : ''
-              }`}
-            >
-              Intelligent Trade
-            </button>
-          </div>
-          {binanceStatus !== 'running' && (
-            <div className="mt-2 p-2 bg-yellow-900/20 border border-yellow-500/30 rounded text-yellow-400 text-xs">
-              <span className="font-mono">⚠️ Binance must be running for technical analysis</span>
-            </div>
-          )}
-        </div>
-        
-        {/* Strategy Selection Panel */}
-        <div className="mt-4 space-y-3">
-          <h3 className="text-sm text-gray-400 font-mono">STRATEGY SELECTION</h3>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-            {[
-              { key: 'MACD_Signal', name: 'MACD Signal', color: 'blue' },
-              { key: 'MA_Cross', name: 'MA Cross', color: 'green' },
-              { key: 'RSI_Divergence', name: 'RSI Divergence', color: 'purple' },
-              { key: 'Bollinger_Bands', name: 'Bollinger Bands', color: 'orange' },
-              { key: 'Volume_Breakout', name: 'Volume Breakout', color: 'cyan' },
-              { key: 'Support_Resistance', name: 'Support/Resistance', color: 'pink' }
-            ].map((strategy) => (
-              <button
-                key={strategy.key}
-                onClick={() => {
-                  setSelectedIntelligentStrategies(prev => 
-                    prev.includes(strategy.key) 
-                      ? prev.filter(s => s !== strategy.key)
-                      : [...prev, strategy.key]
-                  );
-                }}
-                disabled={intelligentStatus === 'running'}
-                className={`px-3 py-2 border rounded text-xs font-mono transition-all ${
-                  selectedIntelligentStrategies.includes(strategy.key)
-                    ? `bg-${strategy.color}-600/20 border-${strategy.color}-500 text-${strategy.color}-300`
-                    : 'bg-gray-800/30 border-gray-600 text-gray-400'
-                } ${
-                  intelligentStatus === 'running' 
-                    ? 'opacity-50 cursor-not-allowed' 
-                    : 'hover:opacity-80'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <div className={`w-2 h-2 rounded-full ${
-                    selectedIntelligentStrategies.includes(strategy.key)
-                      ? `bg-${strategy.color}-400`
-                      : 'bg-gray-500'
-                  }`}></div>
-                  <span>{strategy.name}</span>
-                </div>
-              </button>
-            ))}
-          </div>
-          {intelligentStatus === 'running' && (
-            <div className="mt-2 p-2 bg-red-900/20 border border-red-500/30 rounded text-red-400 text-xs">
-              <span className="font-mono">⚠️ Stop Intelligent to change strategies</span>
-            </div>
-          )}
-          <div className="mt-2 text-xs text-gray-500">
-            <span className="font-mono">Selected: {selectedIntelligentStrategies.length}/6 strategies</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Micro Profit Generator Panel */}
-      <div className="mb-8 bg-gray-950/50 border border-gray-800 rounded-lg p-6 backdrop-blur-sm">
-        <h2 className="text-xl font-semibold mb-4 flex items-center gap-2 text-green-400">
-          <DollarSign className="w-5 h-5" />
-          Micro Profit Generator
-        </h2>
-        
-        <div className="space-y-4">
-          <h3 className="text-sm text-gray-400 font-mono">PROFIT MAXIMIZER ($0.01+ per trade)</h3>
-          
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={() => {
-                fetch('http://127.0.0.1:5000/micro-profit/generate', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ iterations: 5 })
-                }).then(res => res.json()).then(data => {
-                  if (data.status === 'success') {
-                    toast.success(`💰 Generated ${data.trades_generated} micro-trades`, { toastId: 'micro-profit-success' });
-                  } else {
-                    toast.error(data.message || 'Failed to generate micro-trades', { toastId: 'micro-profit-error' });
-                  }
-                }).catch(() => {
-                  toast.error('Error generating micro-trades', { toastId: 'micro-profit-exception' });
-                });
-              }}
-              className="px-4 py-2 bg-green-600/20 border border-green-500 hover:bg-green-600/40 rounded text-green-400 hover:text-green-300 transition-all font-mono"
-            >
-              Generate 5 Trades ($0.05)
-            </button>
-            
-            <button
-              onClick={() => {
-                fetch('http://127.0.0.1:5000/micro-profit/generate', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ iterations: 10 })
-                }).then(res => res.json()).then(data => {
-                  if (data.status === 'success') {
-                    toast.success(`💰 Generated ${data.trades_generated} micro-trades`, { toastId: 'micro-profit-success' });
-                  } else {
-                    toast.error(data.message || 'Failed to generate micro-trades', { toastId: 'micro-profit-error' });
-                  }
-                }).catch(() => {
-                  toast.error('Error generating micro-trades', { toastId: 'micro-profit-exception' });
-                });
-              }}
-              className="px-4 py-2 bg-green-600/20 border border-green-500 hover:bg-green-600/40 rounded text-green-400 hover:text-green-300 transition-all font-mono"
-            >
-              Generate 10 Trades ($0.10)
-            </button>
-            
-            <button
-              onClick={() => {
-                fetch('http://127.0.0.1:5000/micro-profit/generate', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ iterations: 20 })
-                }).then(res => res.json()).then(data => {
-                  if (data.status === 'success') {
-                    toast.success(`💰 Generated ${data.trades_generated} micro-trades`, { toastId: 'micro-profit-success' });
-                  } else {
-                    toast.error(data.message || 'Failed to generate micro-trades', { toastId: 'micro-profit-error' });
-                  }
-                }).catch(() => {
-                  toast.error('Error generating micro-trades', { toastId: 'micro-profit-exception' });
-                });
-              }}
-              className="px-4 py-2 bg-green-600/20 border border-green-500 hover:bg-green-600/40 rounded text-green-400 hover:text-green-300 transition-all font-mono"
-            >
-              Generate 20 Trades ($0.20)
-            </button>
-          </div>
-          
-          {/* Micro Profit Stats */}
-          {microProfitStats && (
-            <div className="mt-4 p-3 bg-green-900/20 border border-green-500/30 rounded-lg">
-              <h4 className="text-xs font-mono text-green-400 mb-2">MICRO TRADING STATS</h4>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-                <div>
-                  <div className="text-gray-400">Total Trades</div>
-                  <div className="text-green-300 font-mono">{microProfitStats.total_micro_trades}</div>
-                </div>
-                <div>
-                  <div className="text-gray-400">Win Rate</div>
-                  <div className="text-green-300 font-mono">{microProfitStats.win_rate}%</div>
-                </div>
-                <div>
-                  <div className="text-gray-400">Total Profit</div>
-                  <div className="text-green-300 font-mono">${microProfitStats.total_profit.toFixed(4)}</div>
-                </div>
-                <div>
-                  <div className="text-gray-400">Avg Profit</div>
-                  <div className="text-green-300 font-mono">${microProfitStats.avg_profit_per_trade.toFixed(4)}</div>
-                </div>
-              </div>
-            </div>
-          )}
-          
-          <div className="mt-2 p-2 bg-blue-900/20 border border-blue-500/30 rounded text-blue-400 text-xs">
-            <span className="font-mono">📋 High-probability trading with 90%+ win rate and $0.01+ minimum profit per trade</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Binance Trading Modes Panel */}
-      <div className="mb-8 bg-gray-950/50 border border-gray-800 rounded-lg p-6 backdrop-blur-sm">
-        <h2 className="text-xl font-semibold mb-4 flex items-center gap-2 text-orange-400">
-          <Activity className="w-5 h-5" />
-          Binance Trading Modes
-        </h2>
-        
-        {/* Warning when Binance is not running */}
-        {binanceStatus !== 'running' && (
-          <div className="mb-4 p-3 bg-red-900/20 border border-red-500/30 rounded-lg text-red-400 text-sm">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4" />
-              <span className="font-mono">Binance must be running before using trading modes</span>
-            </div>
-          </div>
-        )}
-        
-        {Object.keys(tradingModes).length === 0 ? (
-          <div className="text-gray-500 text-center py-8">
-            <div className="mb-2">🔧 Trading modes not available</div>
-            <div className="text-sm">Make sure the backend is updated with mode endpoints</div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {Object.entries(tradingModes).map(([modeKey, mode]) => (
-              <div key={modeKey} className="border border-gray-700 rounded-lg p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <h3 className="text-lg font-semibold text-cyan-400 capitalize">{modeKey}</h3>
-                    <p className="text-sm text-gray-400">{mode.name}</p>
-                  </div>
-                  <div className={`px-3 py-1 rounded-full border text-sm font-mono ${
-                    binanceModeStatus[modeKey] === 'running'
-                      ? 'bg-green-900/50 border-green-500 text-green-400'
-                      : 'bg-gray-900/50 border-gray-700 text-gray-500'
-                  }`}>
-                    {binanceModeStatus[modeKey] === 'running' ? 'RUNNING' : 'STOPPED'}
-                  </div>
-                </div>
-                
-                <div className="grid grid-cols-1 gap-2 mb-4 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">Risk:</span>
-                    <span className="font-mono text-orange-400">{(mode.risk_percentage * 100).toFixed(1)}%</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">Win Rate:</span>
-                    <span className="font-mono text-green-400">{(mode.win_rate * 100).toFixed(0)}%</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">R:R:</span>
-                    <span className="font-mono text-cyan-400">1:{mode.reward_risk_ratio}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">Max Loss:</span>
-                    <span className="font-mono text-red-400">{mode.max_consecutive_losses}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">Trades/H:</span>
-                    <span className="font-mono text-purple-400">{mode.trades_per_hour}</span>
-                  </div>
-                </div>
-                
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    onClick={() => handleBinanceModeControl('select', modeKey)}
-                    disabled={binanceStatus !== 'running'}
-                    className={`px-4 py-2 border rounded flex items-center gap-2 transition-all text-sm font-mono relative overflow-hidden ${
-                      selectedModes.includes(modeKey)
-                        ? modeKey === 'conservative' 
-                          ? 'bg-green-600/30 border-green-500 text-green-300 shadow-lg shadow-green-500/20'
-                          : modeKey === 'hybrid'
-                            ? 'bg-blue-600/30 border-blue-500 text-blue-300 shadow-lg shadow-blue-500/20'
-                            : 'bg-orange-600/30 border-orange-500 text-orange-300 shadow-lg shadow-orange-500/20'
-                        : binanceStatus !== 'running'
-                          ? 'bg-gray-800/20 border-gray-700 text-gray-600 cursor-not-allowed'
-                          : 'bg-gray-800/30 border-gray-600 text-gray-400 hover:bg-gray-700/40 hover:text-gray-300'
-                    }`}
-                  >
-                    {/* Indicador de selección */}
-                    {selectedModes.includes(modeKey) && (
-                      <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-pulse"></div>
-                    )}
-                    
-                    {/* Icono */}
-                    {selectedModes.includes(modeKey) ? (
-                      <div className="w-3 h-3 rounded-full bg-current animate-pulse"></div>
-                    ) : (
-                      <div className="w-3 h-3 rounded-full border-2 border-current"></div>
-                    )}
-                    
-                    {/* Texto */}
-                    <span className="relative z-10">
-                      {selectedModes.includes(modeKey) ? 'Active' : 'Select'}
-                    </span>
-                  </button>
-                  <button
-                    onClick={() => handleBinanceModeControl('generate', modeKey)}
-                    disabled={selectedModes.length === 0}
-                    className={`px-3 py-1 rounded text-sm font-mono transition-all ${
-                      selectedModes.includes(modeKey)
-                        ? 'bg-yellow-600/20 border border-yellow-500 hover:bg-yellow-600/40 text-yellow-400 hover:text-yellow-300'
-                        : 'bg-gray-700/20 border border-gray-600 text-gray-500 cursor-not-allowed'
-                    }`}
-                  >
-                    Generate Trade
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      {/* Engine Control Panel */}
+      <EngineControlPanel
+        className="mb-8"
+        onGenerateBinanceTrade={handleGenerateBinanceTrade}
+        onClearTrades={handleDeleteAllTrades}
+        onResetStatus={handleClearAllStatus}
+        onGenerateIntelligentTrade={handleGenerateIntelligentTrade}
+        selectedIntelligentStrategies={selectedIntelligentStrategies}
+        setSelectedIntelligentStrategies={setSelectedIntelligentStrategies}
+        microProfitStats={microProfitStats}
+        onGenerateMicroProfit={handleGenerateMicroProfit}
+        tradingModes={tradingModes}
+        binanceModeStatus={binanceModeStatus}
+        selectedModes={selectedModes}
+        onBinanceModeControl={handleBinanceModeControl}
+      />
 
       {/* Metrics Panel */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
@@ -1364,17 +1009,12 @@ const handleDeleteAllTrades = async () => {
                     {trades.map(trade => {
                       const entryTime = new Date(trade.timestamp_entry);
                       const isOpen = !trade.timestamp_exit || trade.timestamp_exit === '' || trade.exit_price === 0;
-                      let exitTime, duration, durationMinutes;
+                      let exitTime;
                       
                       if (isOpen) {
-                        const now = new Date();
-                        duration = now.getTime() - entryTime.getTime();
-                        durationMinutes = Math.floor(duration / 60000);
                         exitTime = null;
                       } else {
                         exitTime = new Date(trade.timestamp_exit);
-                        duration = exitTime.getTime() - entryTime.getTime();
-                        durationMinutes = Math.floor(duration / 60000);
                       }
 
                       return (
