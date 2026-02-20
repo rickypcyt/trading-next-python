@@ -6,12 +6,13 @@ import asyncio
 from datetime import datetime
 from typing import List, Dict, Any
 from database import get_db, Trade, EquityCurve, Metric, Alert
-from simulator import TradingSimulator, run_periodic_simulation
+from simulator import TradingSimulator
 from binance_simulator import BinanceDataSimulator, run_real_time_simulation
 from binance_mode_simulator import BinanceModeSimulator, run_binance_mode_simulation, TRADING_MODES
 from intelligent_simulator import AdvancedTradingSimulator, run_intelligent_simulation
 from micro_profit_generator import MicroProfitGenerator, run_micro_profit_generator
 from monthly_target_simulator import MonthlyTargetSimulator, run_monthly_target_simulation
+from market_alerts import run_market_alert_generator
 from trade_logger import get_trade_logger
 from portfolio_manager import get_portfolio_manager
 from engine_manager import engine_manager
@@ -40,6 +41,7 @@ binance_simulation_task = None
 binance_mode_tasks = {}  # Tareas para cada modo
 intelligent_simulation_task = None
 monthly_target_task = None
+market_alerts_task = None  # Nueva tarea para alertas de mercado
 
 # Variable global para estrategias seleccionadas del Intelligent Simulator
 selected_intelligent_strategies = ['MACD_Signal', 'MA_Cross', 'RSI_Divergence', 'Bollinger_Bands', 'Volume_Breakout', 'Support_Resistance']
@@ -882,7 +884,7 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Detener todas las simulaciones y engines al apagar el servidor"""
-    global simulation_task, binance_simulation_task, intelligent_simulation_task, monthly_target_task, binance_mode_tasks, engine_manager
+    global simulation_task, binance_simulation_task, intelligent_simulation_task, monthly_target_task, market_alerts_task, binance_mode_tasks, engine_manager
     
     # Detener tareas antiguas
     if simulation_task and not simulation_task.done():
@@ -897,6 +899,9 @@ async def shutdown_event():
     if monthly_target_task and not monthly_target_task.done():
         monthly_target_task.cancel()
     
+    if market_alerts_task and not market_alerts_task.done():
+        market_alerts_task.cancel()
+    
     # Detener tareas de modos Binance
     for mode, task in binance_mode_tasks.items():
         if task and not task.done():
@@ -906,6 +911,84 @@ async def shutdown_event():
     await engine_manager.shutdown()
     
     print("🛑 All systems shut down gracefully")
+
+@app.post('/market-alerts/start')
+async def start_market_alerts():
+    """Iniciar generador de alertas de mercado"""
+    global market_alerts_task
+    
+    if is_task_running(market_alerts_task):
+        return {"status": "already_running"}
+    
+    # Iniciar tarea de alertas de mercado en background
+    market_alerts_task = asyncio.create_task(
+        run_market_alert_generator(get_db, lambda data: notify_clients(json.dumps(data)))
+    )
+    
+    await notify_clients(json.dumps({
+        "type": "market_alerts_started",
+        "message": "Market Alert Generator started - analyzing opportunities"
+    }))
+    
+    return {"status": "started"}
+
+@app.post('/market-alerts/stop')
+async def stop_market_alerts():
+    """Detener generador de alertas de mercado"""
+    global market_alerts_task
+    
+    if is_task_running(market_alerts_task):
+        market_alerts_task.cancel()
+        market_alerts_task = None
+        
+        await notify_clients(json.dumps({
+            "type": "market_alerts_stopped",
+            "message": "Market Alert Generator stopped"
+        }))
+        
+        return {"status": "stopped"}
+    
+    return {"status": "not_running"}
+
+@app.post('/market-alerts/generate')
+async def generate_market_alerts(db: Session = Depends(get_db)):
+    """Generar alertas de mercado manualmente"""
+    from market_alerts import get_market_alert_generator
+    
+    try:
+        generator = get_market_alert_generator(db)
+        alerts = await generator.analyze_market_and_generate_alerts()
+        
+        if alerts:
+            await notify_clients(json.dumps({
+                "type": "market_alerts_generated",
+                "message": f"Generated {len(alerts)} market alerts",
+                "data": {
+                    "alerts_count": len(alerts),
+                    "symbols": list(set([a.symbol for a in alerts])),
+                    "alert_types": list(set([a.alert_type.value for a in alerts]))
+                }
+            }))
+            
+            return {
+                "status": "success",
+                "alerts_generated": len(alerts),
+                "alerts": [
+                    {
+                        "symbol": alert.symbol,
+                        "type": alert.alert_type.value,
+                        "message": alert.message,
+                        "confidence": alert.confidence,
+                        "price": alert.price
+                    }
+                    for alert in alerts
+                ]
+            }
+        else:
+            return {"status": "no_alerts", "message": "No market opportunities detected"}
+            
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 @app.post('/monthly/start')
 async def start_monthly_target_simulation():

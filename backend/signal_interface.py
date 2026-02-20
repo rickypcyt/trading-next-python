@@ -89,3 +89,82 @@ class SimulationSignalEmitter(SignalEmitter):
     
     def __init__(self, db_session):
         super().__init__('simulation', db_session)
+
+class ExecutionSignalEmitter(SignalEmitter):
+    """Emitter específico para Execution Engine con costos realistas"""
+    
+    def __init__(self, db_session):
+        super().__init__('execution', db_session)
+    
+    async def emit_realistic_trade(self, 
+                                 symbol: str,
+                                 direction: TradeDirection,
+                                 entry_price: float,
+                                 size: float,
+                                 stop_loss: Optional[float],
+                                 take_profit: Optional[float],
+                                 strategy: str,
+                                 confidence: float = 0.0,
+                                 volatility: Optional[float] = None,
+                                 metadata: Optional[dict] = None) -> bool:
+        """
+        Emitir trade con costos realistas (fees, slippage, spread)
+        """
+        enhanced_metadata = {
+            'execution_type': 'realistic',
+            'includes_fees': True,
+            'includes_slippage': True,
+            'includes_spread': True,
+            **(metadata or {})
+        }
+        
+        return await self.emit_trade_intent(
+            symbol=symbol,
+            direction=direction,
+            entry_price=entry_price,
+            size=size,
+            stop_loss=stop_loss,
+            strategy=strategy,
+            confidence=confidence,
+            volatility=volatility,
+            metadata=enhanced_metadata
+        )
+
+class TradingSignalEmitter(SignalEmitter):
+    """Emitter específico para Trading Engine con análisis técnico"""
+    
+    def __init__(self, db_session):
+        super().__init__('trading', db_session)
+    
+    async def emit_technical_signal(self,
+                                  symbol: str,
+                                  direction: TradeDirection,
+                                  entry_price: float,
+                                  stop_loss: Optional[float],
+                                  take_profit: Optional[float],
+                                  strategy: str,
+                                  indicators: dict,
+                                  confidence: float = 0.0,
+                                  volatility: Optional[float] = None,
+                                  metadata: Optional[dict] = None) -> bool:
+        """
+        Emitir señal basada en análisis técnico
+        """
+        enhanced_metadata = {
+            'signal_type': 'technical_analysis',
+            'indicators': indicators,
+            'analysis_method': strategy,
+            **(metadata or {})
+        }
+        
+        return await self.emit_trade_intent(
+            symbol=symbol,
+            direction=direction,
+            entry_price=entry_price,
+            size=0.0,  # Se calculará en base al riesgo
+            stop_loss=stop_loss,
+            strategy=strategy,
+            confidence=confidence,
+            volatility=volatility,
+            metadata=enhanced_metadata
+        )
