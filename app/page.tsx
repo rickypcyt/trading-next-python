@@ -39,6 +39,50 @@ export interface Trade {
   volatility: number;
 }
 
+interface TradeEventPayload {
+  id?: number | string;
+  trade_id?: number | string;
+  timestamp_entry?: string;
+  entry_time?: string;
+  timestamp_exit?: string;
+  exit_time?: string;
+  symbol?: string;
+  ticker?: string;
+  strategy?: string;
+  source_strategy?: string;
+  source_engine?: string;
+  source?: string;
+  source_mode?: string;
+  direction?: string;
+  side?: string;
+  entry_price?: number | string;
+  price?: number | string;
+  entry?: number | string;
+  exit_price?: number | string;
+  exit?: number | string;
+  target_price?: number | string;
+  size?: number | string;
+  quantity?: number | string;
+  position_size?: number | string;
+  investment_amount?: number | string;
+  pnl?: number | string;
+  net_pnl?: number | string;
+  gross_pnl?: number | string;
+  total_costs?: number | string;
+  costs?: number | string;
+  entry_fees?: number | string;
+  exit_fees?: number | string;
+  slippage_cost?: number | string;
+  spread_cost?: number | string;
+  requested_entry_price?: number | string;
+  requested_exit_price?: number | string;
+  confidence?: number | string;
+  volatility?: number | string;
+  duration_ms?: number | string;
+  duration_formatted?: string;
+  [key: string]: unknown;
+}
+
 interface Engine {
   type: string;
   status: 'idle' | 'running' | 'error';
@@ -98,6 +142,30 @@ const setStoredStatus = (key: string, value: string) => {
   }
 };
 
+const DETAILED_TRADE_CSV_HEADERS = [
+  'ID',
+  'Date',
+  'Time',
+  'Symbol',
+  'Strategy',
+  'Engine',
+  'Direction',
+  'Entry',
+  'Exit',
+  'Size',
+  'Investment',
+  'P&L',
+  'Gross P&L',
+  '%',
+  'Costs',
+  'Fees',
+  'Slippage',
+  'Spread',
+  'Confidence',
+  'Volatility',
+  'Duration',
+];
+
 function getTimeAgo(date: Date): string {
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
@@ -132,8 +200,105 @@ export default function TradingDashboard() {
   });
   const [selectedModes, setSelectedModes] = useState<string[]>([]);
   const [displayLimit, setDisplayLimit] = useState<number>(50);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [hasMoreTrades, setHasMoreTrades] = useState<boolean>(false);
+  const [isDeletingTrades, setIsDeletingTrades] = useState<boolean>(false);
+
+  const formatDurationFromMs = useCallback((durationMs: number) => {
+    if (!durationMs || durationMs <= 0) return '0s';
+    const totalSeconds = Math.floor(durationMs / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+  }, []);
+
+  const normalizeTradeFromEvent = useCallback((payload: TradeEventPayload): Trade => {
+    const id = Number(payload.id ?? payload.trade_id ?? Date.now());
+    const timestampEntry = payload.timestamp_entry ?? payload.entry_time ?? new Date().toISOString();
+    const timestampExit = payload.timestamp_exit ?? payload.exit_time ?? '';
+    const toNumber = (value: number | string | undefined): number =>
+      value === undefined ? 0 : Number(value) || 0;
+
+    const entryPrice = toNumber(payload.entry_price ?? payload.price ?? payload.entry);
+    const exitPrice = toNumber(payload.exit_price ?? payload.exit ?? payload.target_price);
+    const size = toNumber(payload.size ?? payload.quantity ?? payload.position_size);
+    const investment = toNumber(payload.investment_amount) || (entryPrice && size ? entryPrice * size : 0);
+    const pnl = toNumber(payload.pnl ?? payload.net_pnl);
+    const grossPnl = toNumber(payload.gross_pnl ?? pnl);
+    const totalCosts = toNumber(payload.total_costs ?? payload.costs);
+    const entryFees = toNumber(payload.entry_fees);
+    const exitFees = toNumber(payload.exit_fees);
+    const slippageCost = toNumber(payload.slippage_cost);
+    const spreadCost = toNumber(payload.spread_cost);
+    const requestedEntryPrice = toNumber(payload.requested_entry_price ?? entryPrice);
+    const requestedExitPrice = toNumber(payload.requested_exit_price ?? exitPrice);
+    const volatility = toNumber(payload.volatility);
+    const confidence = toNumber(payload.confidence);
+    const durationMs = toNumber(payload.duration_ms);
+
+    const directionRaw = (payload.direction ?? payload.side ?? 'long').toString().toLowerCase();
+    const direction: 'long' | 'short' = directionRaw === 'short' ? 'short' : 'long';
+
+    const notional = investment || (entryPrice * size);
+    const pnlPercentage = notional ? (pnl / notional) * 100 : 0;
+    const costImpactPct = notional ? (totalCosts / notional) * 100 : 0;
+
+    return {
+      id,
+      timestamp_entry: timestampEntry,
+      timestamp_exit: timestampExit,
+      symbol: payload.symbol ?? payload.ticker ?? 'UNKNOWN',
+      strategy: payload.strategy ?? payload.source_strategy ?? 'unknown',
+      source_engine: payload.source_engine ?? payload.source ?? 'unknown',
+      source_mode: payload.source_mode ?? '',
+      direction,
+      entry_price: entryPrice,
+      exit_price: exitPrice,
+      requested_entry_price: requestedEntryPrice,
+      requested_exit_price: requestedExitPrice,
+      size,
+      investment_amount: investment,
+      pnl,
+      gross_pnl: grossPnl,
+      pnl_percentage: pnlPercentage,
+      total_costs: totalCosts,
+      entry_fees: entryFees,
+      exit_fees: exitFees,
+      slippage_cost: slippageCost,
+      spread_cost: spreadCost,
+      cost_impact_pct: costImpactPct,
+      duration_formatted: payload.duration_formatted ?? formatDurationFromMs(durationMs),
+      confidence,
+      volatility,
+    } as Trade;
+  }, [formatDurationFromMs]);
+
+  const addTradeFromEvent = useCallback((payload: TradeEventPayload) => {
+    const trade = normalizeTradeFromEvent(payload);
+    setAllTrades(prevAll => {
+      const deduped = prevAll.filter(existing => existing.id !== trade.id);
+      const updatedAll = [trade, ...deduped].sort((a, b) => new Date(b.timestamp_entry).getTime() - new Date(a.timestamp_entry).getTime());
+      setTrades(updatedAll.slice(0, displayLimit));
+      setHasMoreTrades(updatedAll.length > displayLimit);
+      return updatedAll;
+    });
+  }, [displayLimit, normalizeTradeFromEvent]);
+
+  const removeTradeById = useCallback((tradeId: number) => {
+    setAllTrades(prev => {
+      const updated = prev.filter(trade => trade.id !== tradeId);
+      setTrades(updated.slice(0, displayLimit));
+      setHasMoreTrades(updated.length > displayLimit);
+      return updated;
+    });
+  }, [displayLimit]);
+
+  const clearTradesState = useCallback(() => {
+    setAllTrades([]);
+    setTrades([]);
+    setHasMoreTrades(false);
+  }, []);
 
   // Restore stored values after mount to avoid hydration mismatch
   useEffect(() => {
@@ -156,6 +321,9 @@ export default function TradingDashboard() {
   }, []);
 
   const fetchAllData = useCallback(async () => {
+    if (!isRefreshing) {
+      setIsRefreshing(true);
+    }
     try {
       const [tradesRes, metricsRes, alertsRes, modesRes, enginesRes] = await Promise.all([
         fetch('http://127.0.0.1:5000/trades'),
@@ -194,8 +362,10 @@ export default function TradingDashboard() {
     } catch (error) {
       console.error('Error fetching data:', error);
       toast.error('Error loading dashboard data', { toastId: 'fetch-error' });
+    } finally {
+      setIsRefreshing(false);
     }
-  }, [displayLimit]);
+  }, [displayLimit, isRefreshing]);
 
   // Update selected strategies when they change
   useEffect(() => {
@@ -342,17 +512,35 @@ export default function TradingDashboard() {
               toast.info(`📊 Binance ${data.data.mode} trade: ${data.data.pnl > 0 ? '+' : ''}$${data.data.pnl.toFixed(2)}`, {
                 toastId: `binance-${data.data.mode}-trade-${data.data.trade_id}`,
               });
-              fetchAllData();
+              if (data.data) addTradeFromEvent(data.data);
               break;
               
             case 'trade_added':
+              if (data.data) addTradeFromEvent(data.data);
+              break;
             case 'real_trade_generated':
+              if (data.data) addTradeFromEvent(data.data);
+              break;
             case 'monthly_target_trade_generated':
+              if (data.data) addTradeFromEvent(data.data);
+              break;
             case 'equity_updated':
             case 'metrics_updated':
             case 'alert_added':
             case 'intelligent_trade_generated':
-              fetchAllData(); // Refresh data para estos eventos
+              if (data.data && (data.type === 'intelligent_trade_generated')) {
+                addTradeFromEvent(data.data);
+              } else {
+                fetchAllData(); // Mantener sincronización para otras métricas
+              }
+              break;
+            case 'trade_deleted':
+              if (data.data?.trade_id !== undefined) {
+                removeTradeById(Number(data.data.trade_id));
+              }
+              break;
+            case 'trades_cleared':
+              clearTradesState();
               break;
           }
         };
@@ -384,9 +572,8 @@ export default function TradingDashboard() {
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       if (ws) ws.close();
     };
-  }, [fetchAllData, selectedModes]);
+  }, [fetchAllData, selectedModes, addTradeFromEvent, clearTradesState, removeTradeById]);
 
-  
   const handleBinanceModeControl = async (action: 'select' | 'generate', mode: string) => {
     try {
       if (action === 'select') {
@@ -476,24 +663,6 @@ export default function TradingDashboard() {
     keys.forEach(key => localStorage.removeItem(`trading_${key}`));
   }
 };
-
-const handleDeleteAllTrades = async () => {
-    try {
-      const response = await fetch('http://127.0.0.1:5000/trades', { method: 'DELETE' });
-      const result = await response.json();
-
-      if (result.status === 'success') {
-        toast.success('🧹 All trades cleared', { toastId: 'trades-cleared' });
-        fetchAllData();
-      } else {
-        toast.error(result.message || 'Failed to clear trades', { toastId: 'clear-trades-error' });
-      }
-    } catch (error) {
-      console.error('Delete trades error:', error);
-      toast.error('Error clearing trades', { toastId: 'clear-trades-exception' });
-    }
-  };
-
   const handleClearAllStatus = () => {
     clearAllStoredStatus();
     setSelectedModes([]);
@@ -521,23 +690,21 @@ const handleDeleteAllTrades = async () => {
     toast.info(`📊 Showing all ${allTrades.length} trades`, { toastId: 'show-all-trades' });
   };
 
-  const copyAllTrades = () => {
+  const copyAllTrades = useCallback(() => {
     if (allTrades.length === 0) {
       toast.error('No trades to copy', { toastId: 'copy-trades-empty' });
       return;
     }
 
-    // Crear texto CSV con todos los trades detallados
-    const headers = ['ID', 'Date', 'Time', 'Symbol', 'Strategy', 'Engine', 'Direction', 'Entry', 'Exit', 'Size', 'Investment', 'P&L', 'Gross P&L', '%', 'Costs', 'Fees', 'Slippage', 'Spread', 'Confidence', 'Volatility', 'Duration'];
     const csvContent = [
-      headers.join(','),
+      DETAILED_TRADE_CSV_HEADERS.join(','),
       ...allTrades.map(trade => {
         const entryTime = new Date(trade.timestamp_entry);
         const exitTime = new Date(trade.timestamp_exit);
         const duration = exitTime.getTime() - entryTime.getTime();
         const durationMinutes = Math.floor(duration / 60000);
         const durationStr = durationMinutes > 0 ? `${durationMinutes}m` : '<1m';
-        
+
         return [
           trade.id,
           entryTime.toLocaleDateString(),
@@ -549,7 +716,7 @@ const handleDeleteAllTrades = async () => {
           trade.entry_price.toFixed(6),
           trade.exit_price?.toFixed(6) || '0',
           trade.size.toFixed(8),
-          trade.investment_amount?.toFixed(2) || '0',
+          (trade.investment_amount ?? trade.entry_price * trade.size).toFixed(2),
           `${trade.pnl >= 0 ? '+' : ''}${trade.pnl.toFixed(6)}`,
           `${trade.gross_pnl >= 0 ? '+' : ''}${trade.gross_pnl.toFixed(6)}`,
           `${trade.pnl_percentage >= 0 ? '+' : ''}${trade.pnl_percentage.toFixed(2)}%`,
@@ -564,31 +731,28 @@ const handleDeleteAllTrades = async () => {
       })
     ];
 
-    // Copiar al portapapeles
     navigator.clipboard.writeText(csvContent.join('\n')).then(() => {
       toast.success(`✅ Copied ${allTrades.length} detailed trades to clipboard!`, { toastId: 'trades-copied' });
     }).catch(() => {
       toast.error('❌ Failed to copy trades', { toastId: 'trades-copy-error' });
     });
-  };
+  }, [allTrades]);
 
-  const downloadTradesCSV = () => {
+  const downloadTradesCSV = useCallback(() => {
     if (allTrades.length === 0) {
       toast.error('No trades to download', { toastId: 'download-trades-empty' });
       return;
     }
 
-    // Crear CSV detallado
-    const headers = ['ID', 'Date', 'Time', 'Symbol', 'Strategy', 'Engine', 'Direction', 'Entry', 'Exit', 'Size', 'P&L', 'Gross P&L', '%', 'Costs', 'Fees', 'Slippage', 'Spread', 'Confidence', 'Volatility', 'Duration'];
     const csvContent = [
-      headers.join(','),
+      DETAILED_TRADE_CSV_HEADERS.join(','),
       ...allTrades.map(trade => {
         const entryTime = new Date(trade.timestamp_entry);
         const exitTime = new Date(trade.timestamp_exit);
         const duration = exitTime.getTime() - entryTime.getTime();
         const durationMinutes = Math.floor(duration / 60000);
         const durationStr = durationMinutes > 0 ? `${durationMinutes}m` : '<1m';
-        
+
         return [
           trade.id,
           entryTime.toLocaleDateString(),
@@ -600,6 +764,7 @@ const handleDeleteAllTrades = async () => {
           trade.entry_price.toFixed(6),
           trade.exit_price?.toFixed(6) || '0',
           trade.size.toFixed(8),
+          (trade.investment_amount ?? trade.entry_price * trade.size).toFixed(2),
           `${trade.pnl >= 0 ? '+' : ''}${trade.pnl.toFixed(6)}`,
           `${trade.gross_pnl >= 0 ? '+' : ''}${trade.gross_pnl.toFixed(6)}`,
           `${trade.pnl_percentage >= 0 ? '+' : ''}${trade.pnl_percentage.toFixed(2)}%`,
@@ -614,7 +779,6 @@ const handleDeleteAllTrades = async () => {
       })
     ];
 
-    // Crear blob y descargar
     const blob = new Blob([csvContent.join('\n')], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -624,58 +788,77 @@ const handleDeleteAllTrades = async () => {
     a.click();
     document.body.removeChild(a);
     window.URL.revokeObjectURL(url);
-    
-    toast.success(`📥 Downloaded ${allTrades.length} detailed trades as CSV!`, { toastId: 'trades-downloaded' });
-  };
 
+    toast.success(` Downloaded ${allTrades.length} detailed trades as CSV!`, { toastId: 'trades-downloaded' });
+  }, [allTrades]);
 
-  // Calculate real equity curve from all trades
   const realEquityData = useMemo(() => {
     if (allTrades.length === 0) return [];
-    
-    // Sort trades by timestamp
-    const sortedTrades = [...allTrades].sort((a, b) => 
+
+    const sortedTrades = [...allTrades].sort((a, b) =>
       new Date(a.timestamp_entry).getTime() - new Date(b.timestamp_entry).getTime()
     );
-    
-    // Calculate cumulative P&L over time
+
     const equityPoints: EquityPoint[] = [];
-    let runningCapital = 100; // Starting capital
+    let runningCapital = 100;
     let lastDate = '';
-    
-    // Add initial point
+
     if (sortedTrades.length > 0) {
       const firstTradeDate = new Date(sortedTrades[0].timestamp_entry);
-      firstTradeDate.setHours(0, 0, 0, 0); // Start of day
+      firstTradeDate.setHours(0, 0, 0, 0);
       equityPoints.push({
         timestamp: firstTradeDate.toISOString(),
-        capital: Math.round(100 * 100) / 100 // Redondear a 2 decimales
+        capital: 100,
       });
     }
-    
+
     sortedTrades.forEach(trade => {
       runningCapital += trade.pnl;
-      const tradeDate = new Date(trade.timestamp_exit);
-      
-      // Only add one point per day (the last trade of the day)
+      const tradeDate = new Date(trade.timestamp_exit || trade.timestamp_entry);
       const dateStr = tradeDate.toDateString();
+
       if (dateStr !== lastDate) {
         equityPoints.push({
-          timestamp: trade.timestamp_exit,
-          capital: Math.round(runningCapital * 100) / 100 // Redondear a 2 decimales
+          timestamp: trade.timestamp_exit || trade.timestamp_entry,
+          capital: Math.round(runningCapital * 100) / 100,
         });
         lastDate = dateStr;
-      } else {
-        // Update the last point for the same day
-        if (equityPoints.length > 0) {
-          equityPoints[equityPoints.length - 1].capital = Math.round(runningCapital * 100) / 100; // Redondear a 2 decimales
-          equityPoints[equityPoints.length - 1].timestamp = trade.timestamp_exit;
-        }
+      } else if (equityPoints.length > 0) {
+        equityPoints[equityPoints.length - 1] = {
+          timestamp: trade.timestamp_exit || trade.timestamp_entry,
+          capital: Math.round(runningCapital * 100) / 100,
+        };
       }
     });
-    
+
     return equityPoints;
   }, [allTrades]);
+
+  const handleDeleteAllTrades = useCallback(async () => {
+    if (allTrades.length === 0 || isDeletingTrades) return;
+
+    const confirmed = window.confirm('⚠️ This will permanently delete all trades, metrics, equity history and alerts. Continue?');
+    if (!confirmed) return;
+
+    try {
+      setIsDeletingTrades(true);
+      const response = await fetch('http://127.0.0.1:5000/trades', {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+
+      toast.success('✅ Trades cleared successfully', { toastId: 'trades-cleared' });
+      await fetchAllData();
+    } catch (error) {
+      console.error('Error deleting trades:', error);
+      toast.error('❌ Failed to delete trades');
+    } finally {
+      setIsDeletingTrades(false);
+    }
+  }, [allTrades.length, isDeletingTrades, fetchAllData]);
 
   const totalPnL = useMemo(
     () => allTrades.reduce((sum, trade) => sum + trade.pnl, 0),
@@ -950,16 +1133,18 @@ const handleDeleteAllTrades = async () => {
       </div>
 
       {/* All Trades Table */}
-      <TradesTable
-        trades={trades}
-        allTrades={allTrades}
-        hasMoreTrades={hasMoreTrades}
-        totalPnL={totalPnL}
-        onShowMoreTrades={handleShowMoreTrades}
-        onShowAllTrades={handleShowAllTrades}
-        onCopyAllTrades={copyAllTrades}
-        onDownloadTradesCSV={downloadTradesCSV}
-      />
+        <TradesTable
+          trades={trades}
+          allTrades={allTrades}
+          hasMoreTrades={hasMoreTrades}
+          totalPnL={totalPnL}
+          onShowMoreTrades={handleShowMoreTrades}
+          onShowAllTrades={handleShowAllTrades}
+          onCopyAllTrades={copyAllTrades}
+          onDownloadTradesCSV={downloadTradesCSV}
+          onDeleteAllTrades={handleDeleteAllTrades}
+          isDeletingAllTrades={isDeletingTrades}
+        />
 
       {/* Order Book de Nuestros Trades */}
       <div className="bg-gray-950/50 border border-gray-800 rounded-lg p-6 backdrop-blur-sm mb-8">

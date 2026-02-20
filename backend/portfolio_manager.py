@@ -56,6 +56,7 @@ class PortfolioState:
     total_capital: float = 100.0
     available_capital: float = 100.0
     allocated_capital: float = 0.0
+    peak_capital: float = 100.0
     max_drawdown: float = 0.0
     current_drawdown: float = 0.0
     daily_pnl: float = 0.0
@@ -66,6 +67,7 @@ class PortfolioState:
     
     # Exposición por símbolo
     symbol_exposure: Dict[str, float] = field(default_factory=dict)
+    pending_exposure: Dict[str, Dict[str, float]] = field(default_factory=dict)
     
     # Límites de riesgo
     max_engine_exposure: float = 0.4  # 40% máximo por motor
@@ -123,30 +125,39 @@ class PortfolioManager:
                 return
             
             # Calcular capital y P&L desde trades
-            running_capital = self.state.total_capital
-            max_capital = self.state.total_capital
+            initial_capital = self.state.total_capital
+            running_capital = initial_capital
+            peak_capital = self.state.peak_capital
+            
+            # Reiniciar exposición acumulada (solo reconstruiremos si hay posiciones abiertas)
+            self.state.engine_exposure.clear()
+            self.state.symbol_exposure.clear()
+            self.state.pending_exposure.clear()
+            self.state.allocated_capital = 0.0
             
             for trade in trades:
                 running_capital += trade.pnl
-                max_capital = max(max_capital, running_capital)
+                peak_capital = max(peak_capital, running_capital)
                 
-                # Actualizar exposición por motor
-                engine = self._extract_engine_from_strategy(trade.strategy)
-                if engine not in self.state.engine_exposure:
-                    self.state.engine_exposure[engine] = 0.0
-                self.state.engine_exposure[engine] += abs(trade.pnl)
-                
-                # Actualizar exposición por símbolo
-                if trade.symbol not in self.state.symbol_exposure:
-                    self.state.symbol_exposure[trade.symbol] = 0.0
-                self.state.symbol_exposure[trade.symbol] += abs(trade.pnl)
+                # Si el trade permanece abierto (sin timestamp_exit), reservar exposición
+                trade_open = getattr(trade, 'timestamp_exit', None) in (None, '', '0')
+                trade_status = getattr(trade, 'status', 'executed')
+                if trade_open or trade_status not in ('executed', 'closed', 'finished'):
+                    notional = abs(float(trade.entry_price) * float(trade.size))
+                    engine = self._extract_engine_from_strategy(trade.strategy)
+                    self.state.engine_exposure[engine] = self.state.engine_exposure.get(engine, 0.0) + notional
+                    self.state.symbol_exposure[trade.symbol] = self.state.symbol_exposure.get(trade.symbol, 0.0) + notional
+                    self.state.allocated_capital += notional
             
             # Actualizar estado final
             self.state.total_capital = running_capital
-            self.state.available_capital = running_capital
-            self.state.max_drawdown = max(0, (max_capital - running_capital) / max_capital * 100)
-            self.state.current_drawdown = self.state.max_drawdown
-            self.state.total_pnl = running_capital - 100.0
+            self.state.peak_capital = max(peak_capital, running_capital)
+            self.state.total_pnl = running_capital - initial_capital
+            self.state.available_capital = max(0.0, running_capital - self.state.allocated_capital)
+            if self.state.peak_capital > 0:
+                drawdown = max(0.0, (self.state.peak_capital - running_capital) / self.state.peak_capital * 100)
+                self.state.current_drawdown = drawdown
+                self.state.max_drawdown = max(self.state.max_drawdown, drawdown)
             
             print(f"📊 Portfolio initialized: ${running_capital:.2f} capital, {self.state.max_drawdown:.2f}% max DD")
             
@@ -167,6 +178,7 @@ class PortfolioManager:
     async def submit_trade_intent(self, intent: TradeIntent) -> SignalStatus:
         """Recibir intención de trade y evaluar riesgo"""
         print(f"📥 Trade intent received: {intent.source_engine} {intent.symbol} ${intent.size * intent.entry_price:.2f}")
+        trade_value = intent.size * intent.entry_price
         
         # 1. Validaciones básicas
         if not self._validate_basic_constraints(intent):
@@ -190,6 +202,9 @@ class PortfolioManager:
             })
             return status
         
+        # Reservar capital y exposición antes de ejecutar
+        self._reserve_trade_capacity(intent, trade_value)
+        
         # 3. Aprobar y ejecutar
         status = SignalStatus.APPROVED
         await self._log_signal(intent, status, "Approved for execution")
@@ -198,6 +213,7 @@ class PortfolioManager:
         try:
             executed_trade = await self._execute_approved_intent(intent)
             if executed_trade:
+                self._release_trade_capacity(intent.id, executed_trade)
                 status = SignalStatus.EXECUTED
                 await self._update_portfolio_state(executed_trade)
                 await self._log_signal(intent, status, "Successfully executed")
@@ -216,10 +232,12 @@ class PortfolioManager:
                 })
             else:
                 status = SignalStatus.FAILED
+                self._release_trade_capacity(intent.id)
                 await self._log_signal(intent, status, "Execution failed")
                 
         except Exception as e:
             status = SignalStatus.FAILED
+            self._release_trade_capacity(intent.id)
             await self._log_signal(intent, status, f"Execution error: {str(e)}")
             print(f"❌ Error executing trade intent: {e}")
         
@@ -244,6 +262,62 @@ class PortfolioManager:
             return False
         
         return True
+
+    def _get_pending_exposure_sum(self, *, engine: Optional[str] = None, symbol: Optional[str] = None) -> float:
+        total = 0.0
+        for reservation in self.state.pending_exposure.values():
+            if engine is not None and reservation['engine'] != engine:
+                continue
+            if symbol is not None and reservation['symbol'] != symbol:
+                continue
+            total += reservation['notional']
+        return total
+
+    def _reserve_trade_capacity(self, intent: TradeIntent, notional: float):
+        self.state.pending_exposure[intent.id] = {
+            'engine': intent.source_engine,
+            'symbol': intent.symbol,
+            'notional': notional,
+        }
+        self.state.allocated_capital += notional
+        self.state.available_capital = max(0.0, self.state.total_capital - self.state.allocated_capital)
+
+    def _release_trade_capacity(self, intent_id: str, executed_trade: Optional[Trade] = None):
+        reservation = self.state.pending_exposure.pop(intent_id, None)
+        if not reservation:
+            return
+
+        notional = reservation['notional']
+        engine = reservation['engine']
+        symbol = reservation['symbol']
+
+        self.state.allocated_capital = max(0.0, self.state.allocated_capital - notional)
+
+        trade_still_open = executed_trade is not None and self._is_trade_open(executed_trade)
+        if trade_still_open:
+            open_notional = abs(float(executed_trade.entry_price) * float(executed_trade.size))
+            self.state.engine_exposure[engine] = self.state.engine_exposure.get(engine, 0.0) + open_notional
+            self.state.symbol_exposure[symbol] = self.state.symbol_exposure.get(symbol, 0.0) + open_notional
+            self.state.allocated_capital += open_notional
+        else:
+            # Si la operación cerró una exposición existente, reducir notional pendiente
+            if engine in self.state.engine_exposure:
+                self.state.engine_exposure[engine] = max(0.0, self.state.engine_exposure[engine] - notional)
+                if self.state.engine_exposure[engine] <= 1e-9:
+                    del self.state.engine_exposure[engine]
+            if symbol in self.state.symbol_exposure:
+                self.state.symbol_exposure[symbol] = max(0.0, self.state.symbol_exposure[symbol] - notional)
+                if self.state.symbol_exposure[symbol] <= 1e-9:
+                    del self.state.symbol_exposure[symbol]
+
+        self.state.available_capital = max(0.0, self.state.total_capital - self.state.allocated_capital)
+
+    def _is_trade_open(self, trade: Trade) -> bool:
+        status = getattr(trade, 'status', '') or ''
+        exit_timestamp = getattr(trade, 'timestamp_exit', None)
+        if status.lower() in {'executed', 'closed', 'finished'} and exit_timestamp:
+            return False
+        return True
     
     def _evaluate_portfolio_risk(self, intent: TradeIntent) -> Dict:
         """Evaluar riesgo de portfolio para la intención"""
@@ -257,7 +331,8 @@ class PortfolioManager:
             }
         
         # 2. Verificar exposición por motor
-        current_engine_exposure = self.state.engine_exposure.get(intent.source_engine, 0.0)
+        engine_pending = self._get_pending_exposure_sum(engine=intent.source_engine)
+        current_engine_exposure = self.state.engine_exposure.get(intent.source_engine, 0.0) + engine_pending
         new_engine_exposure = current_engine_exposure + trade_value
         max_engine_allowed = self.state.total_capital * self.state.max_engine_exposure
         
@@ -268,7 +343,8 @@ class PortfolioManager:
             }
         
         # 3. Verificar exposición por símbolo
-        current_symbol_exposure = self.state.symbol_exposure.get(intent.symbol, 0.0)
+        symbol_pending = self._get_pending_exposure_sum(symbol=intent.symbol)
+        current_symbol_exposure = self.state.symbol_exposure.get(intent.symbol, 0.0) + symbol_pending
         new_symbol_exposure = current_symbol_exposure + trade_value
         max_symbol_allowed = self.state.total_capital * self.state.max_symbol_exposure
         
@@ -402,26 +478,19 @@ class PortfolioManager:
         """Actualizar estado del portfolio después de trade ejecutado"""
         # Actualizar capital
         self.state.total_capital += trade.pnl
-        self.state.available_capital = self.state.total_capital - self.state.allocated_capital
         
         # Actualizar P&L
         self.state.total_pnl += trade.pnl
         self.state.daily_pnl += trade.pnl
         
-        # Actualizar drawdown
-        if self.state.total_capital > (100.0 + self.state.total_pnl):
-            self.state.current_drawdown = ((100.0 + self.state.total_pnl) - self.state.total_capital) / (100.0 + self.state.total_pnl) * 100
-            self.state.max_drawdown = max(self.state.max_drawdown, self.state.current_drawdown)
+        # Actualizar drawdown y capital disponible
+        self.state.peak_capital = max(self.state.peak_capital, self.state.total_capital)
+        if self.state.peak_capital > 0:
+            drawdown = max(0.0, (self.state.peak_capital - self.state.total_capital) / self.state.peak_capital * 100)
+            self.state.current_drawdown = drawdown
+            self.state.max_drawdown = max(self.state.max_drawdown, drawdown)
         
-        # Actualizar exposición
-        engine = self._extract_engine_from_strategy(trade.strategy)
-        if engine not in self.state.engine_exposure:
-            self.state.engine_exposure[engine] = 0.0
-        self.state.engine_exposure[engine] += abs(trade.pnl)
-        
-        if trade.symbol not in self.state.symbol_exposure:
-            self.state.symbol_exposure[trade.symbol] = 0.0
-        self.state.symbol_exposure[trade.symbol] += abs(trade.pnl)
+        self.state.available_capital = max(0.0, self.state.total_capital - self.state.allocated_capital)
         
         # Actualizar equity curve
         equity = EquityCurve(

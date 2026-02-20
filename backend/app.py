@@ -9,7 +9,7 @@ from database import get_db, Trade, EquityCurve, Metric, Alert
 from simulator import TradingSimulator
 from binance_simulator import BinanceDataSimulator, run_real_time_simulation
 from binance_mode_simulator import BinanceModeSimulator, run_binance_mode_simulation, TRADING_MODES
-from intelligent_simulator import AdvancedTradingSimulator, run_intelligent_simulation
+from intelligent_simulator import AdvancedTradingSimulator, run_intelligent_simulation, NotificationManager
 from micro_profit_generator import MicroProfitGenerator, run_micro_profit_generator
 from monthly_target_simulator import MonthlyTargetSimulator, run_monthly_target_simulation
 from market_alerts import run_market_alert_generator
@@ -546,9 +546,12 @@ async def start_intelligent_simulation():
     if is_task_running(intelligent_simulation_task):
         return {"status": "already_running"}
     
+    # Iniciar automáticamente solo el motor avanzado de Binance
+    asyncio.create_task(engine_manager.start_engine('binance_advanced'))
+    
     # Iniciar tarea de simulación inteligente en background
     intelligent_simulation_task = asyncio.create_task(
-        run_intelligent_simulation(get_db, lambda data: notify_clients(json.dumps(data)))
+        run_intelligent_simulation(get_db, websocket_connections, notify_clients)
     )
     
     await notify_clients(json.dumps({
@@ -580,8 +583,6 @@ async def stop_intelligent_simulation():
 async def generate_intelligent_trade(db: Session = Depends(get_db)):
     """Genera un trade inteligente manualmente"""
     from intelligent_simulator import AdvancedTradingSimulator
-    from datetime import datetime
-    
     simulator = AdvancedTradingSimulator(db)
     
     try:
@@ -607,11 +608,12 @@ async def generate_intelligent_trade(db: Session = Depends(get_db)):
             
             # Actualizar equity
             equity = EquityCurve(
-                timestamp=datetime.now().isoformat(),
+                timestamp=datetime.utcnow(),
                 capital=round(simulator.current_capital, 2)
             )
-            db.merge(equity)
+            db.add(equity)
             db.commit()
+            db.refresh(equity)
             
             # Calcular métricas
             metrics = simulator.calculate_comprehensive_metrics()
@@ -624,28 +626,25 @@ async def generate_intelligent_trade(db: Session = Depends(get_db)):
             alerts = simulator.generate_intelligent_alerts(trade)
             for alert in alerts:
                 db.add(alert)
+            if alerts:
                 db.commit()
-                db.refresh(alert)
+                for alert in alerts:
+                    db.refresh(alert)
             
-            await notify_clients(json.dumps({
-                "type": "intelligent_trade_generated",
-                "message": f"Intelligent trade: {trade.symbol} ({('+' if trade.pnl > 0 else '')}${trade.pnl:.2f})",
-                "data": {
-                    "trade_id": trade.id,
-                    "symbol": trade.symbol,
-                    "strategy": trade.strategy,
-                    "entry_price": trade.entry_price,
-                    "exit_price": trade.exit_price,
-                    "pnl": trade.pnl,
-                    "pnl_percentage": (trade.pnl / 100) * 100,
-                    "capital": equity.capital,
-                    "total_trades": simulator.trades_count,
-                    "win_rate": (simulator.winning_trades / simulator.trades_count) * 100 if simulator.trades_count > 0 else 0,
-                    "current_drawdown": simulator.current_drawdown,
-                    "alerts_count": len(alerts),
-                    "source": "intelligent_manual"
-                }
-            }))
+            notification_manager = NotificationManager(
+                websocket_connections=websocket_connections,
+                fallback_broadcaster=notify_clients
+            )
+            await notification_manager.broadcast_intelligent_update({
+                "trade": trade,
+                "equity": equity,
+                "metrics": metrics,
+                "alerts": alerts,
+                "prices": {},
+                "analysis": simulator.technical_data,
+                "total_trades": simulator.trades_count,
+                "current_drawdown": simulator.current_drawdown
+            })
             
             return {"status": "success", "data": {
                 "trade_id": trade.id,

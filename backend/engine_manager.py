@@ -7,7 +7,7 @@ from enum import Enum
 import asyncio
 import json
 
-from signal_interface import SignalEmitter, IntelligentSignalEmitter, BinanceModeSignalEmitter, MicroProfitSignalEmitter, SimulationSignalEmitter, ExecutionSignalEmitter, TradingSignalEmitter
+from signal_interface import SignalEmitter, IntelligentSignalEmitter, BinanceModeSignalEmitter, MicroProfitSignalEmitter, SimulationSignalEmitter, ExecutionSignalEmitter
 from portfolio_manager import get_portfolio_manager
 from database import get_db
 
@@ -42,58 +42,38 @@ class CentralEngineManager:
         # Registrar todos los engines disponibles
         await self._register_all_engines()
         
-        # Iniciar automáticamente binance_advanced (favorito del usuario)
+        # Solo el engine avanzado de Binance se inicia automáticamente
         await self.start_engine("binance_advanced")
-        
+
         print(f"🔧 Engine Manager initialized with {len(self.engines)} engines")
-        print(f"🚀 binance_advanced engine started automatically")
+        print("🚀 Auto-started engine: binance_advanced")
         
     async def _register_all_engines(self):
         """Registrar todos los engines disponibles"""
         
-        # 1. Engines de Modos Binance
-        for mode in ["conservative", "hybrid", "aggressive"]:
-            await self.register_engine(
-                engine_id=f"binance_{mode}",
-                engine_type=EngineType.BINANCE_MODE,
-                emitter=BinanceModeSignalEmitter(self.db_session, mode),
-                status=EngineStatus.IDLE,
-                metadata={"mode": mode}
-            )
-        
-        # 2. Engine Intelligent
+        # 1. Engine Intelligent
         await self.register_engine(
             engine_id="intelligent",
             engine_type=EngineType.INTELLIGENT,
             emitter=IntelligentSignalEmitter(self.db_session),
-            status=EngineStatus.IDLE
+            status=EngineStatus.IDLE,
+            metadata={
+                "description": "Intelligent multi-strategy technical trading"
+            }
         )
         
-        # 3. Engine Micro Profit
+        # 2. Engine Micro Profit
         await self.register_engine(
             engine_id="micro_profit",
             engine_type=EngineType.MICRO_PROFIT,
             emitter=MicroProfitSignalEmitter(self.db_session),
-            status=EngineStatus.IDLE
+            status=EngineStatus.IDLE,
+            metadata={
+                "description": "Micro profit generator"
+            }
         )
         
-        # 4. Engine de Ejecución (ejecuta trades con costos realistas)
-        await self.register_engine(
-            engine_id="execution",
-            engine_type=EngineType.EXECUTION,
-            emitter=ExecutionSignalEmitter(self.db_session),
-            status=EngineStatus.IDLE
-        )
-        
-        # 5. Trading Engine (análisis técnico y generación de señales)
-        await self.register_engine(
-            engine_id="trading",
-            engine_type=EngineType.TRADING,
-            emitter=TradingSignalEmitter(self.db_session),
-            status=EngineStatus.IDLE
-        )
-        
-        # 6. Binance Advanced Engine (genera ADV_MARKET_MAKING_BUY)
+        # 3. Binance Advanced Engine (genera ADV_MARKET_MAKING_BUY)
         await self.register_engine(
             engine_id="binance_advanced",
             engine_type=EngineType.BINANCE_MODE,
@@ -159,8 +139,6 @@ class CentralEngineManager:
                 task = asyncio.create_task(self._run_simulation_engine(engine_id))
             elif engine["type"] == EngineType.EXECUTION:
                 task = asyncio.create_task(self._run_execution_engine(engine_id))
-            elif engine["type"] == EngineType.TRADING:
-                task = asyncio.create_task(self._run_trading_engine(engine_id))
             else:
                 print(f"⚠️  Engine type {engine['type'].value} not runnable")
                 return False
@@ -184,12 +162,10 @@ class CentralEngineManager:
         if engine_id not in self.engines:
             return False
         
-        # Proteger binance_advanced (favorito del usuario)
-        if engine_id == "binance_advanced":
-            print("🚫 binance_advanced engine cannot be stopped (user's favorite)")
-            return False
-        
         engine = self.engines[engine_id]
+        if engine.get("metadata", {}).get("protected"):
+            print(f"🚫 {engine_id} engine is protected and cannot be stopped")
+            return False
         
         if engine["status"] != EngineStatus.RUNNING:
             return True
@@ -243,7 +219,8 @@ class CentralEngineManager:
             try:
                 await run_intelligent_simulation(
                     get_db,
-                    self._create_notification_wrapper()
+                    websocket_connections=None,
+                    notify_clients=self._create_notification_wrapper()
                 )
                 
                 self.engines[engine_id]["trades_generated"] += 1
@@ -416,84 +393,6 @@ class CentralEngineManager:
                 print(f"❌ Error in binance advanced engine {engine_id}: {e}")
                 await asyncio.sleep(5)
     
-    async def _run_trading_engine(self, engine_id: str):
-        """Ejecutar engine de trading con análisis técnico"""
-        from trading_engine import AdvancedTradingEngine
-        from portfolio_manager import TradeDirection as PortfolioTradeDirection
-        import random
-        
-        # Inicializar el motor de trading
-        trading_engine = AdvancedTradingEngine(initial_capital=1000.0)
-        
-        # Símbolos para análisis
-        symbols = ["BTC/USD", "ETH/USD", "BNB/USD", "ADA/USD", "SOL/USD"]
-        
-        while engine_id in self.active_tasks:
-            try:
-                # Analizar cada símbolo
-                for symbol in symbols:
-                    # Generar datos de precios simulados
-                    num_periods = 50
-                    base_price = 45000 if "BTC" in symbol else 2500
-                    
-                    # Simular datos históricos con tendencia y volatilidad
-                    price_data = []
-                    current_price = base_price
-                    
-                    for i in range(num_periods):
-                        # Simular movimiento de precio
-                        change_pct = random.gauss(0, 0.02)  # 2% volatilidad
-                        current_price *= (1 + change_pct)
-                        
-                        price_data.append({
-                            'close': current_price,
-                            'timestamp': datetime.now()
-                        })
-                    
-                    # Analizar con el motor de trading
-                    signals = trading_engine.analyze_symbol(symbol, price_data)
-                    best_signal = trading_engine.get_best_signal(signals)
-                    
-                    if best_signal and best_signal.confidence > 0.5:  # Solo señales de alta confianza
-                        # Convertir dirección
-                        portfolio_direction = PortfolioTradeDirection.LONG if best_signal.signal.value == "buy" else PortfolioTradeDirection.SHORT
-                        
-                        # Emitir señal técnica
-                        emitter = self.engines[engine_id]["emitter"]
-                        success = await emitter.emit_technical_signal(
-                            symbol=best_signal.symbol,
-                            direction=portfolio_direction,
-                            entry_price=best_signal.entry_price,
-                            stop_loss=best_signal.stop_loss,
-                            take_profit=best_signal.take_profit,
-                            strategy=best_signal.strategy,
-                            indicators=best_signal.indicators,
-                            confidence=best_signal.confidence,
-                            volatility=random.uniform(2, 8),
-                            metadata={
-                                "signal_type": "technical_analysis",
-                                "analysis_method": best_signal.strategy,
-                                "indicators_count": len(best_signal.indicators),
-                                "position_size_calculated": best_signal.indicators.get('position_size', 0)
-                            }
-                        )
-                        
-                        if success:
-                            print(f"📊 Trading engine signal: {symbol} {best_signal.signal.value} @ {best_signal.entry_price:.2f} [{best_signal.strategy}]")
-                
-                # Actualizar estadísticas
-                self.engines[engine_id]["trades_generated"] += 1
-                self.engines[engine_id]["last_activity"] = datetime.now()
-                
-                # Esperar antes del siguiente ciclo de análisis
-                await asyncio.sleep(15)  # 15 segundos para análisis técnico
-                
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                self.engines[engine_id]["errors"] += 1
-                print(f"❌ Error in trading engine {engine_id}: {e}")
-                await asyncio.sleep(5)
     
     def _create_notification_wrapper(self):
         """Crear wrapper para notificaciones"""

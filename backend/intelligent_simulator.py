@@ -1,4 +1,5 @@
 import os
+from contextlib import suppress
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from binance.client import Client
@@ -15,6 +16,7 @@ class BinancePriceManager:
         self.prices = {}
         self.symbols = os.getenv('SYMBOLS', 'BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,ADAUSDT,BNBUSDT').split(',')
         self.last_update = {}
+        self.use_fallback = False
         
     def initialize_client(self):
         """Inicializar cliente de Binance con API Keys"""
@@ -24,38 +26,58 @@ class BinancePriceManager:
             
             if api_key and api_secret:
                 self.client = Client(api_key, api_secret)
+                self.use_fallback = False
                 print("🔐 Binance client initialized with API Keys")
                 return True
             else:
                 self.client = Client()
+                self.use_fallback = False
                 print("⚠️  Binance client initialized without API Keys (public data only)")
                 return False
         except Exception as e:
             print(f"❌ Error initializing Binance client: {e}")
+            self.use_fallback = True
             return False
     
     async def get_all_prices(self) -> Dict[str, float]:
         """Obtener precios actuales de todos los símbolos"""
-        if not self.client:
+        if not self.client and not self.use_fallback:
             self.initialize_client()
         
         prices = {}
         try:
             for symbol in self.symbols:
-                ticker = self.client.get_symbol_ticker(symbol=symbol)
-                prices[symbol] = float(ticker['price'])
+                if self.use_fallback:
+                    price = self._get_fallback_price(symbol)
+                else:
+                    try:
+                        ticker = self.client.get_symbol_ticker(symbol=symbol)
+                        price = float(ticker['price'])
+                    except Exception as e:
+                        print(f"❌ Error getting price for {symbol}: {e}" )
+                        self.use_fallback = True
+                        price = self._get_fallback_price(symbol)
+                prices[symbol] = price
+                self.prices[symbol] = price
                 self.last_update[symbol] = datetime.now()
         except Exception as e:
             print(f"❌ Error getting prices: {e}")
+            self.use_fallback = True
+            for symbol in self.symbols:
+                price = self._get_fallback_price(symbol)
+                prices[symbol] = price
+                self.last_update[symbol] = datetime.now()
         
         return prices
     
     def get_historical_data(self, symbol: str, interval: str = '1h', limit: int = 24) -> List[Dict]:
         """Obtener datos históricos OHLCV"""
-        if not self.client:
+        if not self.client and not self.use_fallback:
             self.initialize_client()
         
         try:
+            if self.use_fallback:
+                return self._generate_fallback_klines(symbol, limit)
             klines = self.client.get_klines(
                 symbol=symbol,
                 interval=interval,
@@ -75,7 +97,8 @@ class BinancePriceManager:
             return data
         except Exception as e:
             print(f"❌ Error getting historical data for {symbol}: {e}")
-            return []
+            self.use_fallback = True
+            return self._generate_fallback_klines(symbol, limit)
     
     def calculate_volatility(self, data: List[Dict]) -> float:
         """Calcular volatilidad a partir de datos históricos"""
@@ -86,6 +109,50 @@ class BinancePriceManager:
         avg_return = sum(returns) / len(returns)
         variance = sum((r - avg_return) ** 2 for r in returns) / len(returns)
         return (variance ** 0.5) * 100  # Volatilidad en porcentaje
+
+    def _get_fallback_price(self, symbol: str) -> float:
+        """Generar precio sintético cuando Binance no está disponible"""
+        base_symbol = symbol.replace('USDT', '')
+        base_price = self.prices.get(symbol)
+        if base_price is None:
+            seed_prices = {
+                'BTC': 68000.0,
+                'ETH': 3500.0,
+                'BNB': 450.0,
+                'SOL': 120.0,
+                'XRP': 0.55,
+                'ADA': 0.85
+            }
+            base_price = seed_prices.get(base_symbol, 100.0)
+        # Aplicar pequeño movimiento aleatorio (±1%)
+        drift = random.uniform(-0.01, 0.01)
+        price = max(0.1, base_price * (1 + drift))
+        self.prices[symbol] = price
+        return price
+
+    def _generate_fallback_klines(self, symbol: str, limit: int) -> List[Dict]:
+        """Generar velas sintéticas para análisis técnico"""
+        prices = []
+        current_price = self._get_fallback_price(symbol)
+        now = datetime.now()
+        for i in range(limit):
+            # Generar variaciones pequeñas basadas en volatilidad típica
+            change_pct = random.uniform(-0.015, 0.015)
+            open_price = current_price
+            close_price = max(0.1, open_price * (1 + change_pct))
+            high = max(open_price, close_price) * (1 + abs(change_pct) * 0.5)
+            low = min(open_price, close_price) * (1 - abs(change_pct) * 0.5)
+            volume = random.uniform(100, 1000)
+            prices.append({
+                'timestamp': now - timedelta(hours=limit - i),
+                'open': round(open_price, 2),
+                'high': round(high, 2),
+                'low': round(low, 2),
+                'close': round(close_price, 2),
+                'volume': round(volume, 2)
+            })
+            current_price = close_price
+        return prices
 
 class AdvancedTradingSimulator:
     def __init__(self, db: Session):
@@ -298,38 +365,25 @@ class AdvancedTradingSimulator:
         
         # Ejecutar trade con Execution Engine
         trade_result = execution_engine.execute_trade(
-            trade_request, 
-            self.current_capital, 
+            trade_request,
+            self.current_capital,
             risk_per_trade=0.02  # 2% de riesgo
         )
-        
-        # Simular resultado basado en análisis técnico
-        success_probability = 0.65 + (analysis['market_condition']['confidence'] * 0.15)  # Realista: 65-80%
-        is_successful = random.random() < success_probability
-        
-        # Calcular movimiento de precio basado en volatilidad real
-        base_movement = max(analysis['volatility'] / 100, 0.001)
-        price_movement = random.uniform(base_movement * 0.5, base_movement * 1.5)
-        price_movement = min(price_movement, 0.05)  # limitar 5%
-        
-        if is_successful:
-            # Ganancia basada en dirección
-            if direction == TradeDirection.LONG:
-                exit_price = current_price * (1 + price_movement)
-            else:
-                exit_price = current_price * (1 - price_movement)
-        else:
-            # Pérdida basada en dirección
-            if direction == TradeDirection.LONG:
-                exit_price = current_price * (1 - price_movement * 0.7)  # Pérdida menor que ganancia
-            else:
-                exit_price = current_price * (1 + price_movement * 0.7)
-        
-        # Simular tiempo de espera realista para el trade (10-120 segundos para trades inteligentes)
-        trade_duration_seconds = random.uniform(10, 120)
-        
+
+        signal_strength = self.calculate_signal_strength(analysis, strategy)
+        exit_price = self.estimate_projected_exit_price(
+            analysis=analysis,
+            direction=direction,
+            current_price=current_price,
+            stop_loss=stop_loss,
+            signal_strength=signal_strength
+        )
+
+        # Estimar duración del trade basada en condiciones actuales
+        trade_duration_seconds = self.estimate_trade_duration(analysis)
+
         # Crear timestamps con separación realista
-        entry_time = datetime.now()
+        entry_time = datetime.utcnow()
         exit_time = entry_time + timedelta(seconds=trade_duration_seconds)
         
         # Cerrar trade con Execution Engine
@@ -350,10 +404,10 @@ class AdvancedTradingSimulator:
         
         # Convertir a formato de base de datos
         duration_ms = int((closed_trade.timestamp_exit - closed_trade.timestamp_entry).total_seconds() * 1000)
-        
+
         trade = Trade(
-            timestamp_entry=closed_trade.timestamp_entry.isoformat(),
-            timestamp_exit=closed_trade.timestamp_exit.isoformat(),
+            timestamp_entry=closed_trade.timestamp_entry,
+            timestamp_exit=closed_trade.timestamp_exit,
             symbol=closed_trade.symbol.replace('USDT', '/USD'),
             strategy=closed_trade.strategy,
             entry_price=round(closed_trade.actual_entry_price, 2),
@@ -365,7 +419,8 @@ class AdvancedTradingSimulator:
             exit_reason=closed_trade.exit_reason,
             source_engine="intelligent",
             direction=closed_trade.direction.value,
-            status="executed"
+            status="executed",
+            investment_amount=round(closed_trade.actual_entry_price * closed_trade.position_size, 2)
         )
         
         # Guardar información de costos para análisis
@@ -476,6 +531,114 @@ class AdvancedTradingSimulator:
             'Support_Resistance': 0.8   # Moderado
         }
         return risk_factors.get(strategy, 1.0)
+
+    def calculate_signal_strength(self, analysis: Dict, strategy: str) -> float:
+        """Calcular la fortaleza de la señal basada en análisis técnico."""
+        strength = 0.0
+
+        trend_bias = {
+            'bullish': 0.6,
+            'bearish': -0.6,
+            'sideways': 0.0
+        }
+        strength += trend_bias.get(analysis.get('trend'), 0.0)
+
+        volume_ratio = analysis.get('volume_ratio', 1)
+        strength += (volume_ratio - 1) * 0.4
+
+        rsi = analysis.get('rsi', 50)
+        rsi_component = (50 - abs(rsi - 50)) / 50  # 0 (extremo) a 1 (equilibrado)
+        strength += (rsi_component - 0.5) * 0.3
+
+        volatility = analysis.get('volatility', 0)
+        if volatility > 5:
+            strength -= 0.3
+        elif volatility < 1:
+            strength += 0.1
+
+        price_position = analysis.get('price_position', 0.5)
+        strength += (price_position - 0.5) * 0.4
+
+        strength += self.get_market_condition_bias(analysis.get('market_condition'))
+        strength += self.get_strategy_bias(strategy)
+
+        return max(-1.0, min(1.0, strength))
+
+    def get_market_condition_bias(self, market_condition: Optional[str]) -> float:
+        biases = {
+            'trending_market': 0.25,
+            'high_volume': 0.2,
+            'normal': 0.1,
+            'low_activity': -0.2,
+            'high_volatility': -0.25,
+            'extreme_conditions': -0.35
+        }
+        return biases.get(market_condition, 0.0)
+
+    def get_strategy_bias(self, strategy: str) -> float:
+        biases = {
+            'MA_Cross': 0.15,
+            'MACD_Signal': 0.12,
+            'Volume_Breakout': 0.08,
+            'Support_Resistance': 0.05,
+            'RSI_Divergence': 0.0,
+            'Bollinger_Bands': -0.05
+        }
+        return biases.get(strategy, 0.0)
+
+    def estimate_projected_exit_price(
+        self,
+        analysis: Dict,
+        direction: TradeDirection,
+        current_price: float,
+        stop_loss: float,
+        signal_strength: float
+    ) -> float:
+        """Estimar precio de salida basado en la fortaleza de la señal y volatilidad."""
+        volatility_pct = analysis.get('volatility', 0)
+        base_movement = max(volatility_pct / 100, 0.002)
+
+        sma_ratio = 0.0
+        sma_20 = analysis.get('sma_20') or current_price
+        sma_50 = analysis.get('sma_50') or current_price
+        if sma_50:
+            sma_ratio = (sma_20 - sma_50) / abs(sma_50)
+
+        magnitude_multiplier = 0.35 + abs(signal_strength) * 0.45 + abs(sma_ratio) * 0.2
+        projected_move_pct = base_movement * magnitude_multiplier
+
+        if signal_strength < 0:
+            projected_move_pct *= -1
+
+        projected_price = current_price * (1 + projected_move_pct)
+
+        if direction == TradeDirection.LONG and projected_price < stop_loss:
+            projected_price = stop_loss
+        elif direction == TradeDirection.SHORT and projected_price > stop_loss:
+            projected_price = stop_loss
+
+        # Limitar movimientos extremos al 6%
+        max_move_pct = 0.06
+        upper_bound = current_price * (1 + max_move_pct)
+        lower_bound = current_price * (1 - max_move_pct)
+        projected_price = max(lower_bound, min(upper_bound, projected_price))
+
+        return projected_price
+
+    def estimate_trade_duration(self, analysis: Dict) -> float:
+        """Determinar duración estimada del trade basada en volatilidad y volumen."""
+        volatility = analysis.get('volatility', 1)
+        volume_ratio = max(analysis.get('volume_ratio', 1), 0.5)
+        trend = analysis.get('trend', 'sideways')
+
+        base_duration = 45.0 + (volatility * 4)
+        if trend in ('bullish', 'bearish'):
+            base_duration *= 1.2
+        else:
+            base_duration *= 0.9
+
+        adjusted_duration = base_duration / volume_ratio
+        return max(15.0, min(adjusted_duration, 240.0))
     
     async def run_intelligent_cycle(self):
         """Ejecutar ciclo de trading inteligente"""
@@ -507,11 +670,12 @@ class AdvancedTradingSimulator:
                 
                 # 6. Actualizar equity curve
                 equity = EquityCurve(
-                    timestamp=datetime.now().isoformat(),
+                    timestamp=datetime.utcnow(),
                     capital=round(self.current_capital, 2)
                 )
-                self.db.merge(equity)
+                self.db.add(equity)
                 self.db.commit()
+                self.db.refresh(equity)
                 
                 # 7. Calcular métricas
                 metrics = self.calculate_comprehensive_metrics()
@@ -524,8 +688,10 @@ class AdvancedTradingSimulator:
                 alerts = self.generate_intelligent_alerts(trade)
                 for alert in alerts:
                     self.db.add(alert)
+                if alerts:
                     self.db.commit()
-                    self.db.refresh(alert)
+                    for alert in alerts:
+                        self.db.refresh(alert)
                 
                 return {
                     "trade": trade,
@@ -585,7 +751,7 @@ class AdvancedTradingSimulator:
                     strategy_performance[strategy] = len(strategy_wins) / len(strategy_trades)
             
             return Metric(
-                timestamp=datetime.now().isoformat(),
+                timestamp=datetime.utcnow(),
                 win_rate=round(win_rate, 4),
                 sharpe=round(sharpe, 4),
                 max_drawdown=round(max_drawdown, 2),
@@ -599,18 +765,19 @@ class AdvancedTradingSimulator:
     def generate_intelligent_alerts(self, trade: Trade) -> List[Alert]:
         """Genera alertas inteligentes basadas en análisis"""
         alerts = []
-        pnl_percentage = (trade.pnl / self.current_capital) * 100
+        invested_capital = (trade.entry_price or 0) * (trade.size or 0)
+        pnl_percentage = (trade.pnl / invested_capital * 100) if invested_capital else 0
         
         # Alertas de riesgo basadas en porcentaje
         if pnl_percentage < -3:  # Pérdida > 3% del capital
             alerts.append(Alert(
-                timestamp=datetime.now().isoformat(),
+                timestamp=datetime.utcnow(),
                 type="HIGH_RISK_LOSS",
                 message=f"High risk loss: {trade.pnl:.2f} ({pnl_percentage:.1f}%) on {trade.symbol}"
             ))
         elif pnl_percentage > 5:  # Ganancia > 5% del capital
             alerts.append(Alert(
-                timestamp=datetime.now().isoformat(),
+                timestamp=datetime.utcnow(),
                 type="SIGNIFICANT_PROFIT",
                 message=f"Significant profit: {trade.pnl:.2f} ({pnl_percentage:.1f}%) on {trade.symbol}"
             ))
@@ -618,7 +785,7 @@ class AdvancedTradingSimulator:
         # Alertas de drawdown
         if self.current_drawdown > 15:  # Drawdown > 15%
             alerts.append(Alert(
-                timestamp=datetime.now().isoformat(),
+                timestamp=datetime.utcnow(),
                 type="CRITICAL_DRAWDOWN",
                 message=f"Critical drawdown: {self.current_drawdown:.1f}% (${self.current_capital * self.current_drawdown/100:.2f})"
             ))
@@ -628,7 +795,7 @@ class AdvancedTradingSimulator:
             current_win_rate = self.winning_trades / self.trades_count
             if current_win_rate < 0.3:  # Win rate < 30%
                 alerts.append(Alert(
-                    timestamp=datetime.now().isoformat(),
+                    timestamp=datetime.utcnow(),
                     type="LOW_WIN_RATE",
                     message=f"Low win rate: {current_win_rate:.1%} ({self.winning_trades}/{self.trades_count})"
                 ))
@@ -639,7 +806,7 @@ class AdvancedTradingSimulator:
             volatility = self.technical_data[symbol]['volatility']
             if volatility > 5:  # Volatilidad > 5%
                 alerts.append(Alert(
-                    timestamp=datetime.now().isoformat(),
+                    timestamp=datetime.utcnow(),
                     type="EXTREME_VOLATILITY",
                     message=f"Extreme volatility on {trade.symbol}: {volatility:.1f}%"
                 ))
@@ -648,27 +815,36 @@ class AdvancedTradingSimulator:
 
 # Sistema de notificaciones mejorado
 class NotificationManager:
-    def __init__(self, websocket_connections):
+    def __init__(self, websocket_connections=None, fallback_broadcaster=None):
         self.connections = websocket_connections
+        self.fallback_broadcaster = fallback_broadcaster
     
     async def broadcast_intelligent_update(self, data: Dict):
         """Enviar notificación inteligente con datos completos"""
-        if not self.connections:
+        if not self.connections and not self.fallback_broadcaster:
             return
-        
+
+        trade = data['trade']
+        equity = data['equity']
+        metrics = data.get('metrics')
+        invested_capital = (trade.entry_price or 0) * (trade.size or 0)
+        pnl_percentage = (trade.pnl / invested_capital * 100) if invested_capital else 0
+
         message = {
             "type": "intelligent_trade_generated",
-            "message": f"Intelligent trade: {data['trade'].symbol} ({('+' if data['trade'].pnl > 0 else '')}${data['trade'].pnl:.2f})",
+            "message": f"Intelligent trade: {trade.symbol} ({('+' if trade.pnl > 0 else '')}${trade.pnl:.2f})",
             "data": {
-                "trade_id": data['trade'].id,
-                "symbol": data['trade'].symbol,
-                "strategy": data['trade'].strategy,
-                "entry_price": data['trade'].entry_price,
-                "exit_price": data['trade'].exit_price,
-                "pnl": data['trade'].pnl,
-                "pnl_percentage": (data['trade'].pnl / 100) * 100,  # Asumiendo $100 capital
-                "capital": data['equity'].capital,
-                "win_rate": data['metrics'].win_rate if data['metrics'] else 0,
+                "trade_id": trade.id,
+                "symbol": trade.symbol,
+                "strategy": trade.strategy,
+                "entry_price": trade.entry_price,
+                "exit_price": trade.exit_price,
+                "timestamp_entry": trade.timestamp_entry,
+                "timestamp_exit": trade.timestamp_exit,
+                "pnl": trade.pnl,
+                "pnl_percentage": pnl_percentage,
+                "capital": equity.capital,
+                "win_rate": metrics.win_rate if metrics else 0,
                 "total_trades": data.get('total_trades', 0),
                 "current_drawdown": data.get('current_drawdown', 0),
                 "prices": data.get('prices', {}),
@@ -676,38 +852,55 @@ class NotificationManager:
                 "alerts_count": len(data['alerts'])
             }
         }
-        
-        # Enviar a todos los clientes conectados
-        for connection in self.connections.copy():
-            try:
-                await connection.send_text(json.dumps(message))
-            except:
-                self.connections.discard(connection)
+
+        payload = json.dumps(message, default=self._serialize_datetime)
+
+        if self.connections:
+            for connection in self.connections.copy():
+                try:
+                    await connection.send_text(payload)
+                except Exception:
+                    self.connections.discard(connection)
+
+        if self.fallback_broadcaster:
+            await self.fallback_broadcaster(payload)
+
+    @staticmethod
+    def _serialize_datetime(value):
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return value
 
 # Función principal para ejecutar el sistema inteligente
-async def run_intelligent_simulation(db_factory, notify_clients):
-    """Ejecutar simulación inteligente cada 8 segundos"""
-    notification_manager = NotificationManager(set())
-    
+async def run_intelligent_simulation(db_factory, websocket_connections=None, notify_clients=None):
+    """Ejecutar simulación inteligente cada 20 segundos"""
+    notification_manager = NotificationManager(websocket_connections, notify_clients)
+
     while True:
+        db_generator = db_factory()
         try:
-            db = next(db_factory())
+            db = next(db_generator)
+        except StopIteration:
+            print("❌ Unable to acquire database session for intelligent simulation")
+            await asyncio.sleep(20)
+            continue
+
+        try:
             simulator = AdvancedTradingSimulator(db)
-            
+
             # Ejecutar ciclo inteligente
             result = await simulator.run_intelligent_cycle()
-            
+
             if result:
-                # Actualizar contador de trades
                 result['total_trades'] = simulator.trades_count
                 result['current_drawdown'] = simulator.current_drawdown
-                
-                # Enviar notificación
+
                 await notification_manager.broadcast_intelligent_update(result)
-            
-            db.close()
-            
+
         except Exception as e:
             print(f"❌ Error in intelligent simulation: {e}")
-        
-        await asyncio.sleep(20)  # Intervalo de 20 segundos
+        finally:
+            with suppress(StopIteration):
+                next(db_generator)
+
+        await asyncio.sleep(20)

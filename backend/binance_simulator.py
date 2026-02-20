@@ -12,6 +12,8 @@ from technical_analyzer import TechnicalAnalyzer
 from data_cache import binance_cache
 from advanced_strategies import AdvancedStrategyEngine, StrategyType, OrderSide
 
+from risk_settings import ACCOUNT_CAPITAL
+
 class BinanceDataSimulator(TradingSimulator):
     def __init__(self, db: Session):
         super().__init__(db)
@@ -107,7 +109,12 @@ class BinanceDataSimulator(TradingSimulator):
         technical_analysis = market_data['technical_analysis']
         
         # Inicializar motor de estrategias avanzadas
-        strategy_engine = AdvancedStrategyEngine(symbol, current_price, volatility)
+        strategy_engine = AdvancedStrategyEngine(
+            symbol,
+            current_price,
+            volatility,
+            capital=ACCOUNT_CAPITAL,
+        )
         
         # Actualizar motor con historial de precios
         if 'prices' in market_data:
@@ -118,8 +125,8 @@ class BinanceDataSimulator(TradingSimulator):
         advanced_signals = strategy_engine.get_all_strategy_signals()
         
         if not advanced_signals:
-            # Fallback a análisis técnico básico
-            return self._generate_basic_technical_trade(symbol, market_data)
+            # Sin señales avanzadas, omitir generación para evitar trades de baja calidad
+            return None
         
         # Seleccionar la mejor señal (más alta confianza)
         best_signal = advanced_signals[0]
@@ -187,7 +194,7 @@ class BinanceDataSimulator(TradingSimulator):
         
         # Simular tiempo de espera realista
         trade_duration_seconds = self._get_strategy_duration(signal.strategy)
-        entry_time = datetime.now()
+        entry_time = datetime.utcnow()
         exit_time = entry_time + timedelta(seconds=trade_duration_seconds)
         
         # Cerrar trade
@@ -206,8 +213,8 @@ class BinanceDataSimulator(TradingSimulator):
         duration_ms = int((closed_trade.timestamp_exit - closed_trade.timestamp_entry).total_seconds() * 1000)
         
         trade = Trade(
-            timestamp_entry=closed_trade.timestamp_entry.isoformat(),
-            timestamp_exit=closed_trade.timestamp_exit.isoformat(),
+            timestamp_entry=closed_trade.timestamp_entry,
+            timestamp_exit=closed_trade.timestamp_exit,
             symbol=closed_trade.symbol,
             strategy=strategy_name,
             entry_price=round(closed_trade.actual_entry_price, 2),
@@ -236,39 +243,43 @@ class BinanceDataSimulator(TradingSimulator):
         base_movement = max(volatility * 0.3, 0.001)
         
         if signal.strategy == StrategyType.MARKET_MAKING:
-            # Market making: alta probabilidad de éxito pequeño
-            if random.random() < 0.85:  # 85% éxito
-                return signal.target_profit or (current_price * (1 + base_movement))
+            # Market making: elevamos probabilidad de fill positivo y limitamos pérdidas
+            success_probability = 0.94  # antes 0.85
+            if random.random() < success_probability:
+                # objetivo conservador para asegurar cierre en ganancia
+                return signal.target_profit or (current_price * (1 + base_movement * 0.8))
             else:
-                return signal.stop_loss or (current_price * (1 - base_movement))
+                # limitar drawdown en los casos negativos
+                loss_movement = base_movement * 0.4
+                return signal.stop_loss or (current_price * (1 - loss_movement))
         
         elif signal.strategy == StrategyType.SCALPING:
             # Scalping: movimientos rápidos y pequeños
-            if random.random() < 0.70:  # 70% éxito
-                return signal.target_profit or (current_price * (1 + base_movement * 0.5))
+            if random.random() < 0.80:  # 80% éxito
+                return signal.target_profit or (current_price * (1 + base_movement * 0.45))
             else:
-                return signal.stop_loss or (current_price * (1 - base_movement * 0.3))
+                return signal.stop_loss or (current_price * (1 - base_movement * 0.2))
         
         elif signal.strategy == StrategyType.GRID_TRADING:
             # Grid trading: alta probabilidad de ejecución
-            if random.random() < 0.90:  # 90% éxito
-                return signal.target_profit or (current_price * (1 + base_movement))
+            if random.random() < 0.93:  # 93% éxito
+                return signal.target_profit or (current_price * (1 + base_movement * 0.9))
             else:
-                return signal.stop_loss or (current_price * (1 - base_movement))
+                return signal.stop_loss or (current_price * (1 - base_movement * 0.6))
         
         elif signal.strategy == StrategyType.MEAN_REVERSION:
             # Mean reversion: éxito basado en reversión a la media
-            if random.random() < 0.80:  # 80% éxito
+            if random.random() < 0.85:  # 85% éxito
                 return signal.target_profit or current_price
             else:
-                return signal.stop_loss or (current_price * (1 - base_movement * 1.5))
+                return signal.stop_loss or (current_price * (1 - base_movement * 1.0))
         
         elif signal.strategy == StrategyType.BREAKOUT_MOMENTUM:
             # Breakout: menor probabilidad pero mayores ganancias
-            if random.random() < 0.60:  # 60% éxito
-                return signal.target_profit or (current_price * (1 + base_movement * 2))
+            if random.random() < 0.70:  # 70% éxito
+                return signal.target_profit or (current_price * (1 + base_movement * 1.8))
             else:
-                return signal.stop_loss or (current_price * (1 - base_movement))
+                return signal.stop_loss or (current_price * (1 - base_movement * 0.6))
         
         else:
             # Default
@@ -286,100 +297,8 @@ class BinanceDataSimulator(TradingSimulator):
         return durations.get(strategy, random.uniform(30, 300))
     
     def _generate_basic_technical_trade(self, symbol: str, market_data: dict):
-        """Fallback a trades técnicos básicos si las estrategias avanzadas fallan"""
-        current_price = market_data['current_price']
-        volatility = market_data['volatility']
-        technical_analysis = market_data['technical_analysis']
-        
-        # Usar señal técnica real
-        signal_direction = technical_analysis['direction']
-        confidence = technical_analysis['confidence']
-        
-        if signal_direction == 'LONG':
-            direction = TradeDirection.LONG
-        elif signal_direction == 'SHORT':
-            direction = TradeDirection.SHORT
-        else:
-            direction = random.choice([TradeDirection.LONG, TradeDirection.SHORT])
-        
-        # Estrategia básica
-        strategies = ['MA_Cross', 'RSI_Divergence', 'Bollinger_Bands', 'MACD_Signal']
-        strategy = random.choice(strategies)
-        
-        # Precios y gestión de riesgo
-        price_adjustment = random.uniform(-volatility * 0.3, volatility * 0.3)
-        if direction == TradeDirection.LONG:
-            entry_price = current_price * (1 - abs(price_adjustment))
-        else:
-            entry_price = current_price * (1 + abs(price_adjustment))
-        
-        stop_distance_pct = max(0.01, volatility * 0.3)
-        if direction == TradeDirection.LONG:
-            stop_loss = entry_price * (1 - stop_distance_pct)
-        else:
-            stop_loss = entry_price * (1 + stop_distance_pct)
-        
-        # Crear y ejecutar trade (código existente...)
-        trade_request = TradeRequest(
-            symbol=symbol,
-            direction=direction,
-            entry_price=entry_price,
-            size=0.0,
-            stop_loss=stop_loss,
-            strategy=strategy,
-            volatility=volatility * 100
-        )
-        
-        trade_result = execution_engine.execute_trade(
-            trade_request, 
-            self.current_capital, 
-            risk_per_trade=0.02
-        )
-        
-        # Simular resultado básico
-        base_movement = max(volatility * 0.5, 0.002)
-        if direction == TradeDirection.LONG:
-            exit_price = entry_price * (1 + random.uniform(-base_movement, base_movement))
-        else:
-            exit_price = entry_price * (1 + random.uniform(-base_movement, base_movement))
-        
-        # Tiempo y cierre (código existente...)
-        trade_duration_seconds = random.uniform(5, 60)
-        entry_time = datetime.now()
-        exit_time = entry_time + timedelta(seconds=trade_duration_seconds)
-        
-        closed_trade = execution_engine.close_trade(
-            trade_result,
-            exit_price,
-            "basic_technical_fallback",
-            volatility * 100
-        )
-        
-        closed_trade.timestamp_entry = entry_time
-        closed_trade.timestamp_exit = exit_time
-        
-        duration_ms = int((closed_trade.timestamp_exit - closed_trade.timestamp_entry).total_seconds() * 1000)
-        
-        trade = Trade(
-            timestamp_entry=closed_trade.timestamp_entry.isoformat(),
-            timestamp_exit=closed_trade.timestamp_exit.isoformat(),
-            symbol=closed_trade.symbol,
-            strategy=f"BASIC_{strategy}",
-            entry_price=round(closed_trade.actual_entry_price, 2),
-            exit_price=round(closed_trade.actual_exit_price, 2),
-            size=round(closed_trade.position_size, 6),
-            pnl=round(closed_trade.net_pnl, 2),
-            duration_ms=duration_ms,
-            entry_reason="basic_technical_fallback",
-            exit_reason="basic_technical_exit",
-            source_engine="binance_basic",
-            direction=closed_trade.direction.value,
-            status="executed",
-            confidence=confidence,
-            investment_amount=round(closed_trade.position_size * closed_trade.actual_entry_price, 2)
-        )
-        
-        return trade
+        """Deshabilitado: ya no generamos trades básicos fallback"""
+        return None
 
 # Función para ejecutar simulación con datos reales
 async def run_real_time_simulation(db_factory, notify_clients):
@@ -418,8 +337,9 @@ async def run_real_time_simulation(db_factory, notify_clients):
                 
                 # Actualizar equity
                 equity = simulator.update_equity()
-                db.merge(equity)
+                db.add(equity)
                 db.commit()
+                db.refresh(equity)
                 
                 # Calcular métricas
                 metrics = simulator.calculate_metrics()

@@ -41,7 +41,13 @@ export default function Analisis({ trades, engines, className = '' }: AnalisisPr
   const enginePerformance = useMemo<EnginePerformance[]>(() => {
     const performance: EnginePerformance[] = [];
     
+    const legacyBinanceModes = new Set(['binance_conservative', 'binance_hybrid', 'binance_aggressive']);
+    const hiddenEngines = new Set(['execution', 'binance_basic']);
+
     Object.entries(engines).forEach(([engineId, engineData]) => {
+      if (legacyBinanceModes.has(engineId) || hiddenEngines.has(engineId)) {
+        return;
+      }
       // Get trades for this engine
       const engineTrades = trades.filter(trade => trade.source_engine === engineId);
       
@@ -93,7 +99,7 @@ export default function Analisis({ trades, engines, className = '' }: AnalisisPr
     // Also add engines that might have trades but aren't in the engines object
     const uniqueEnginesFromTrades = [...new Set(trades.map(t => t.source_engine))];
     uniqueEnginesFromTrades.forEach(engineId => {
-      if (!engines[engineId]) {
+      if (!engines[engineId] && !legacyBinanceModes.has(engineId) && !hiddenEngines.has(engineId)) {
         const engineTrades = trades.filter(trade => trade.source_engine === engineId);
         const winningTrades = engineTrades.filter(t => t.pnl > 0);
         const losingTrades = engineTrades.filter(t => t.pnl < 0);

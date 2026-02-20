@@ -111,7 +111,7 @@ class MicroProfitGenerator:
         direction = self._determine_safe_direction(market_condition)
         print(f"📈 Direction: {direction}")
         
-        # Calcular entry/exit con profit objetivo de $0.05
+        # Calcular entry/exit con profit objetivo
         entry_price = current_price
         target_profit = self.target_profit_per_trade
         
@@ -128,28 +128,55 @@ class MicroProfitGenerator:
         
         print(f"🎯 Entry: ${entry_price:.2f}, Exit: ${exit_price:.2f}, Stop: ${stop_loss:.2f}")
         
-        # Simular resultado con alta probabilidad de éxito
-        success_probability = 0.85 + (market_condition['confidence'] * 0.1)
-        is_successful = random.random() < success_probability
-        print(f"🎲 Success probability: {success_probability:.2f}, Result: {'SUCCESS' if is_successful else 'FAIL'}")
+        # Observar precio real tras un breve lapso para decidir resultado
+        await asyncio.sleep(0.2)
+        latest_price = await self._get_current_price(symbol)
+        success_probability = min(0.85 + (market_condition['confidence'] * 0.1), 0.97)
         
-        if is_successful:
-            final_price = exit_price
-            pnl = target_profit
+        if latest_price:
+            if direction == 'long':
+                if latest_price >= exit_price:
+                    is_successful = True
+                elif latest_price <= stop_loss:
+                    is_successful = False
+                else:
+                    is_successful = random.random() < success_probability
+            else:  # short
+                if latest_price <= exit_price:
+                    is_successful = True
+                elif latest_price >= stop_loss:
+                    is_successful = False
+                else:
+                    is_successful = random.random() < success_probability
         else:
-            final_price = stop_loss
-            pnl = -position_value * self.max_risk_per_trade
+            is_successful = random.random() < success_probability
+            latest_price = exit_price if is_successful else stop_loss
         
+        print(f"🎲 Success probability: {success_probability:.2f}, Observed price: ${latest_price:.2f if latest_price else 'N/A'} Result: {'SUCCESS' if is_successful else 'FAIL'}")
+        
+        if direction == 'long':
+            if is_successful:
+                final_price = max(exit_price, latest_price or exit_price)
+            else:
+                final_price = min(stop_loss, latest_price or stop_loss)
+            pnl = (final_price - entry_price) * position_size
+        else:
+            if is_successful:
+                final_price = min(exit_price, latest_price or exit_price)
+            else:
+                final_price = max(stop_loss, latest_price or stop_loss)
+            pnl = (entry_price - final_price) * position_size
+
         print(f"💸 Final P&L: ${pnl:.4f}")
         
         # Crear trade
-        entry_time = datetime.now()
+        entry_time = datetime.utcnow()
         exit_time = entry_time + timedelta(seconds=30)  # Trades muy rápidos
         duration_ms = 30000  # 30 segundos
         
         trade = Trade(
-            timestamp_entry=entry_time.isoformat(),
-            timestamp_exit=exit_time.isoformat(),
+            timestamp_entry=entry_time,
+            timestamp_exit=exit_time,
             symbol=symbol,
             strategy="Micro_Profit_Generator",
             entry_price=round(entry_price, 2),
@@ -160,7 +187,7 @@ class MicroProfitGenerator:
             entry_reason="micro_profit_signal",
             exit_reason="micro_profit_close",
             source_engine="micro_profit",
-            direction="LONG",
+            direction=direction.upper(),
             status="executed"
         )
         

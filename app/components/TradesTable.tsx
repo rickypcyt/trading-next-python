@@ -1,6 +1,6 @@
 'use client';
 
-import { Copy, Download, GripVertical, RotateCcw } from 'lucide-react';
+import { Copy, Download, GripVertical, RotateCcw, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 // Importar tipos desde page.tsx
@@ -38,6 +38,8 @@ interface TradesTableProps {
   onShowAllTrades: () => void;
   onCopyAllTrades: () => void;
   onDownloadTradesCSV: () => void;
+  onDeleteAllTrades: () => void;
+  isDeletingAllTrades?: boolean;
 }
 
 const TradesTable: React.FC<TradesTableProps> = ({
@@ -49,6 +51,8 @@ const TradesTable: React.FC<TradesTableProps> = ({
   onShowAllTrades,
   onCopyAllTrades,
   onDownloadTradesCSV,
+  onDeleteAllTrades,
+  isDeletingAllTrades = false,
 }) => {
   // Cargar columnas desde localStorage o usar las por defecto
   const [columns, setColumns] = useState<ColumnConfig[]>(() => {
@@ -362,6 +366,19 @@ const TradesTable: React.FC<TradesTableProps> = ({
               <RotateCcw className="w-4 h-4" />
               Reset Columns
             </button>
+            <button
+              onClick={onDeleteAllTrades}
+              disabled={isDeletingAllTrades || allTrades.length === 0}
+              className={`px-3 py-1 border rounded flex items-center gap-2 text-sm font-mono transition-all ${
+                isDeletingAllTrades || allTrades.length === 0
+                  ? 'bg-red-900/20 border-red-800 text-red-800 cursor-not-allowed'
+                  : 'bg-red-600/20 border-red-500 hover:bg-red-600/40 text-red-400 hover:text-red-300'
+              }`}
+              title={allTrades.length === 0 ? 'No trades to delete' : 'Delete all trades'}
+            >
+              <Trash2 className={`w-4 h-4 ${isDeletingAllTrades ? 'animate-pulse' : ''}`} />
+              {isDeletingAllTrades ? 'Clearing…' : 'Delete All'}
+            </button>
           </div>
         </div>
       </div>
@@ -398,7 +415,6 @@ const TradesTable: React.FC<TradesTableProps> = ({
               </thead>
               <tbody>
                 {trades.map((trade: Trade) => {
-                  const entryTime = new Date(trade.timestamp_entry);
                   const isOpen = !trade.timestamp_exit || trade.timestamp_exit === '' || trade.exit_price === 0;
 
                   return (

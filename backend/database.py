@@ -14,8 +14,8 @@ class Trade(Base):
     __tablename__ = "trades"
     
     id = Column(Integer, primary_key=True, index=True)
-    timestamp_entry = Column(String)
-    timestamp_exit = Column(String)
+    timestamp_entry = Column(DateTime)
+    timestamp_exit = Column(DateTime)
     symbol = Column(String, index=True)
     strategy = Column(String)
     
@@ -62,14 +62,14 @@ class Trade(Base):
 class EquityCurve(Base):
     __tablename__ = "equity_curve"
     
-    timestamp = Column(String, primary_key=True)
+    timestamp = Column(DateTime, primary_key=True, default=datetime.utcnow)
     capital = Column(Float)
 
 class Metric(Base):
     __tablename__ = "metrics"
     
     id = Column(Integer, primary_key=True, index=True)
-    timestamp = Column(String)
+    timestamp = Column(DateTime, default=datetime.utcnow)
     win_rate = Column(Float)
     sharpe = Column(Float)
     max_drawdown = Column(Float)
@@ -79,7 +79,7 @@ class Alert(Base):
     __tablename__ = "alerts"
     
     id = Column(Integer, primary_key=True, index=True)
-    timestamp = Column(String)
+    timestamp = Column(DateTime, default=datetime.utcnow)
     type = Column(String)
     message = Column(Text)
 
