@@ -269,7 +269,7 @@ async def generate_binance_trade(db: Session = Depends(get_db)):
 # Trades endpoints
 @app.get('/trades')
 def get_trades(db: Session = Depends(get_db)):
-    trades = db.query(Trade).order_by(Trade.timestamp_entry.desc()).limit(50).all()
+    trades = db.query(Trade).order_by(Trade.timestamp_entry.desc()).all()
     return [
         {
             # Información básica

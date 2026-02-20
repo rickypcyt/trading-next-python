@@ -7,13 +7,14 @@ import { useEffect, useState } from 'react';
 import type { Trade } from '../page';
 
 interface ColumnConfig {
-  key: keyof Trade | 'custom_opened' | 'custom_closed' | 'custom_duration';
+  key: keyof Trade | 'custom_opened' | 'custom_closed' | 'custom_duration' | 'copy';
   label: string;
   align: 'left' | 'right' | 'center';
   width?: string;
 }
 
 const defaultColumns: ColumnConfig[] = [
+  { key: 'copy', label: '', align: 'center', width: '60px' }, // Columna de copiar al principio
   { key: 'id', label: 'ID', align: 'left' },
   { key: 'custom_opened', label: 'Opened', align: 'left' },
   { key: 'custom_closed', label: 'Closed', align: 'left' },
@@ -61,8 +62,10 @@ const TradesTable: React.FC<TradesTableProps> = ({
             // Check if the removed columns are still in the stored configuration
             const hasCostsColumn = parsedColumns.some((col: ColumnConfig) => col.key === 'total_costs');
             const hasEngineColumn = parsedColumns.some((col: ColumnConfig) => col.key === 'source_engine');
-            if (hasCostsColumn || hasEngineColumn) {
-              // Auto-reset to remove the old columns
+            const hasCopyColumn = parsedColumns.some((col: ColumnConfig) => col.key === 'copy');
+            
+            if (hasCostsColumn || hasEngineColumn || !hasCopyColumn) {
+              // Auto-reset to remove the old columns and add copy column
               localStorage.removeItem('trades-table-columns');
               return defaultColumns;
             }
@@ -111,6 +114,58 @@ const TradesTable: React.FC<TradesTableProps> = ({
     setColumns(defaultColumns);
     if (typeof window !== 'undefined') {
       localStorage.removeItem('trades-table-columns');
+    }
+  };
+
+  const copyTradeToClipboard = async (trade: Trade) => {
+    try {
+      const entryTime = new Date(trade.timestamp_entry);
+      const exitTime = trade.timestamp_exit ? new Date(trade.timestamp_exit) : null;
+      const isOpen = !trade.timestamp_exit || trade.timestamp_exit === '' || trade.exit_price === 0;
+      
+      // Formatear toda la información del trade
+      const tradeInfo = [
+        `ID: ${trade.id}`,
+        `Opened: ${entryTime.toLocaleDateString()} ${entryTime.toLocaleTimeString()}`,
+        `Closed: ${isOpen ? 'OPEN' : `${exitTime!.toLocaleDateString()} ${exitTime!.toLocaleTimeString()}`}`,
+        `Symbol: ${trade.symbol}`,
+        `Direction: ${trade.direction?.toUpperCase() || 'N/A'}`,
+        `Strategy: ${trade.strategy}`,
+        `Engine: ${trade.source_engine}`,
+        `Entry Price: $${trade.entry_price.toFixed(6)}`,
+        `Exit Price: ${isOpen ? '-' : `$${trade.exit_price.toFixed(6)}`}`,
+        `Size: ${trade.size.toFixed(8)}`,
+        `Investment: $${trade.investment_amount?.toFixed(2) || '0.00'}`,
+        `P&L: ${isOpen ? 'OPEN' : `${trade.pnl >= 0 ? '+' : ''}$${trade.pnl.toFixed(6)}`}`,
+        `P&L %: ${isOpen ? '-' : `${trade.pnl >= 0 ? '+' : ''}${trade.pnl_percentage.toFixed(2)}%`}`,
+        `Duration: ${trade.duration_formatted}`,
+        `Confidence: ${trade.confidence > 0 ? `${trade.confidence.toFixed(1)}%` : 'N/A'}`,
+        `Volatility: ${trade.volatility > 0 ? trade.volatility.toFixed(2) : 'N/A'}`,
+        `Costs: $${trade.total_costs?.toFixed(6) || '0.00'}`,
+        `Fees: $${(trade.entry_fees + trade.exit_fees).toFixed(6)}`,
+        `Slippage: $${trade.slippage_cost?.toFixed(6) || '0.00'}`,
+        `Spread: $${trade.spread_cost?.toFixed(6) || '0.00'}`,
+        `Cost Impact: ${trade.cost_impact_pct > 0 ? `${trade.cost_impact_pct.toFixed(2)}%` : 'N/A'}`,
+        `Requested Entry: $${trade.requested_entry_price.toFixed(6)}`,
+        `Requested Exit: $${trade.requested_exit_price.toFixed(6)}`,
+      ].join('\n');
+      
+      await navigator.clipboard.writeText(tradeInfo);
+      
+      // Mostrar notificación de éxito
+      import('react-toastify').then(toast => {
+        toast.toast.success(`✅ Trade #${trade.id} copied to clipboard!`, {
+          toastId: `trade-${trade.id}-copied`,
+          autoClose: 2000
+        });
+      });
+    } catch (error) {
+      console.error('Error copying trade:', error);
+      import('react-toastify').then(toast => {
+        toast.toast.error('❌ Failed to copy trade', {
+          toastId: 'copy-trade-error'
+        });
+      });
     }
   };
 
@@ -237,6 +292,17 @@ const TradesTable: React.FC<TradesTableProps> = ({
               </span>
             )}
           </div>
+        );
+      
+      case 'copy':
+        return (
+          <button
+            onClick={() => copyTradeToClipboard(trade)}
+            className="p-2 hover:bg-gray-700 rounded-lg transition-colors group"
+            title="Copy trade details"
+          >
+            <Copy className="w-4 h-4 text-gray-400 group-hover:text-white transition-colors" />
+          </button>
         );
       
       default:

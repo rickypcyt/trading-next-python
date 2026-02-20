@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, type SetStateAction } from 'react';
 import {
   Settings, Play, Pause,
-  AlertTriangle, Gauge, X, Info,
+  X,
 } from 'lucide-react';
 import { toast } from 'react-toastify';
 
@@ -180,15 +180,33 @@ function getEngineConfig(engineType: string): Record<string, string> {
   };
 }
 
-function getEngineMetrics(engine: Engine): {
+async function getEngineMetrics(engine: Engine): Promise<{
   winRate: number;
   avgTradeSize: number;
   riskReward: number;
   maxDrawdown: number;
   profitFactor: number;
   sharpeRatio: number;
-} {
-  // Métricas basadas en rendimiento real del engine
+}> {
+  try {
+    // Obtener métricas reales del backend
+    const response = await fetch(`http://127.0.0.1:5000/engines/${engine.type}/metrics`);
+    if (response.ok) {
+      const metrics = await response.json();
+      return {
+        winRate: metrics.win_rate || 0,
+        avgTradeSize: metrics.avg_trade_size || 0,
+        riskReward: metrics.risk_reward || 1,
+        maxDrawdown: metrics.max_drawdown || 0,
+        profitFactor: metrics.profit_factor || 1,
+        sharpeRatio: metrics.sharpe_ratio || 0
+      };
+    }
+  } catch (error) {
+    console.warn('Error fetching engine metrics:', error);
+  }
+
+  // Fallback a métricas calculadas basadas en datos del engine
   const baseMetrics = {
     binance_mode: { winRate: 0.68, avgTradeSize: 150, riskReward: 1.8, maxDrawdown: 12.5, profitFactor: 1.45, sharpeRatio: 1.2 },
     intelligent: { winRate: 0.72, avgTradeSize: 85, riskReward: 2.5, maxDrawdown: 8.3, profitFactor: 1.82, sharpeRatio: 1.6 },
@@ -315,6 +333,31 @@ function getEngineStrategy(engineType: string): Array<{title: string, descriptio
   ];
 }
 
+// ─── Persistencia de engines running ───────────────────────────────────────────
+
+const RUNNING_ENGINES_KEY = 'trading-running-engines';
+
+function getSavedRunningEngines(): Set<string> {
+  if (typeof window === 'undefined') return new Set();
+  
+  try {
+    const saved = localStorage.getItem(RUNNING_ENGINES_KEY);
+    return saved ? new Set(JSON.parse(saved)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function saveRunningEngines(runningEngines: Set<string>): void {
+  if (typeof window === 'undefined') return;
+  
+  try {
+    localStorage.setItem(RUNNING_ENGINES_KEY, JSON.stringify([...runningEngines]));
+  } catch {
+    // Silently fail if localStorage is full
+  }
+}
+
 // ─── Componentes auxiliares ──────────────────────────────────────────────────
 
 function ActionButton({
@@ -377,8 +420,16 @@ const EngineControlPanel: React.FC<EngineControlPanelProps> = ({
 }) => {
   const [engines, setEngines] = useState<Record<string, Engine>>({});
   const [loading, setLoading] = useState(true);
-  const [selectedEngines, setSelectedEngines] = useState<Set<string>>(new Set());
+  const [selectedEngines, setSelectedEngines] = useState<Set<string>>(() => getSavedRunningEngines());
   const [selectedEngine, setSelectedEngine] = useState<string | null>(null);
+  const [engineMetrics, setEngineMetrics] = useState<Record<string, {
+    winRate: number;
+    avgTradeSize: number;
+    riskReward: number;
+    maxDrawdown: number;
+    profitFactor: number;
+    sharpeRatio: number;
+  }>>({});
 
   const fetchEngines = useCallback(async () => {
     try {
@@ -408,10 +459,12 @@ const EngineControlPanel: React.FC<EngineControlPanelProps> = ({
       const res = await fetch(`http://127.0.0.1:5000/engines/${engineId}/${action}`, { method: 'POST' });
       if (!res.ok) throw new Error();
       
-      setEngines(prev => ({
-        ...prev,
-        [engineId]: { ...prev[engineId], status: isRunning ? 'idle' : 'running' },
-      }));
+      setEngines(prev => {
+        return {
+          ...prev,
+          [engineId]: { ...prev[engineId], status: isRunning ? 'idle' : 'running' },
+        };
+      });
 
       setSelectedEngines(prev => {
         const s = new Set(prev);
@@ -445,6 +498,41 @@ const EngineControlPanel: React.FC<EngineControlPanelProps> = ({
     const interval = setInterval(fetchEngines, 10000);
     return () => clearInterval(interval);
   }, [fetchEngines]);
+
+  // Guardar engines running en localStorage
+  useEffect(() => {
+    saveRunningEngines(selectedEngines);
+  }, [selectedEngines]);
+
+  // Restaurar engines running al cargar
+  useEffect(() => {
+    const savedEngines = getSavedRunningEngines();
+    if (savedEngines.size > 0 && Object.keys(engines).length > 0) {
+      // Restaurar engines que estaban running antes
+      savedEngines.forEach(engineId => {
+        const engine = engines[engineId];
+        if (engine && engine.status !== 'running') {
+          // Actualizar el estado local para que coincida con lo guardado
+          setSelectedEngines(prev => new Set([...prev, engineId]));
+        }
+      });
+    }
+  }, [engines]); // Solo ejecutar cuando los engines carguen
+
+  // Cargar métricas cuando se selecciona un engine
+  useEffect(() => {
+    if (selectedEngine && engines[selectedEngine] && !engineMetrics[selectedEngine]) {
+      const loadMetrics = async () => {
+        try {
+          const metrics = await getEngineMetrics(engines[selectedEngine]);
+          setEngineMetrics(prev => ({ ...prev, [selectedEngine]: metrics }));
+        } catch (error) {
+          console.error('Error loading engine metrics:', error);
+        }
+      };
+      loadMetrics();
+    }
+  }, [selectedEngine, engines, engineMetrics]);
 
   // Cerrar modal con Escape key
   useEffect(() => {
@@ -549,13 +637,17 @@ const EngineControlPanel: React.FC<EngineControlPanelProps> = ({
                           <span className="text-base font-semibold text-white font-mono">{id}</span>
                         </div>
                         <div className="flex items-center justify-center">
-                          <ActionButton
-                            variant={isRunning ? 'danger' : 'success'}
-                            size="sm"
-                            onClick={() => toggleEngine(id)}
-                          >
-                            {isRunning ? <><Pause className="w-4 h-4" /> Stop</> : <><Play className="w-4 h-4" /> Start</>}
-                          </ActionButton>
+                          <div onClick={(e: React.MouseEvent) => {
+                            e.stopPropagation(); // Evitar que se abra el modal
+                            toggleEngine(id);
+                          }}>
+                            <ActionButton
+                              variant={isRunning ? 'danger' : 'success'}
+                              size="sm"
+                            >
+                              {isRunning ? <><Pause className="w-4 h-4" /> Stop</> : <><Play className="w-4 h-4" /> Start</>}
+                            </ActionButton>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -630,6 +722,7 @@ const EngineControlPanel: React.FC<EngineControlPanelProps> = ({
                 const engine = engines[selectedEngine];
                 console.log('Engine data:', engine); // Debug para ver el tipo real
                 const info = engine ? ENGINE_INFO[engine.type] : null;
+                const metrics = engineMetrics[selectedEngine];
                 
                 if (!engine || !info) {
                   return (
@@ -668,24 +761,26 @@ const EngineControlPanel: React.FC<EngineControlPanelProps> = ({
                     <div>
                       <h5 className="text-gray-300 font-semibold mb-3 md:mb-4 lg:mb-5 text-base md:text-lg lg:text-xl">Performance Metrics</h5>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
-                        {(() => {
-                          const metrics = getEngineMetrics(engine);
-                          return [
-                            { label: 'Win Rate', value: `${(metrics.winRate * 100).toFixed(2)}%`, color: 'text-emerald-400' },
-                            { label: 'Avg Trade Size', value: `$${metrics.avgTradeSize.toFixed(2)}`, color: 'text-cyan-400' },
-                            { label: 'Risk/Reward', value: `1:${metrics.riskReward.toFixed(2)}`, color: 'text-purple-400' },
-                            { label: 'Max Drawdown', value: `${metrics.maxDrawdown.toFixed(2)}%`, color: 'text-red-400' },
-                            { label: 'Profit Factor', value: metrics.profitFactor.toFixed(2), color: 'text-green-400' },
-                            { label: 'Sharpe Ratio', value: metrics.sharpeRatio.toFixed(2), color: 'text-yellow-400' },
-                          ].map((metric, index) => (
-                            <div key={index} className="bg-gray-900/50 border border-gray-800 rounded-lg p-3 md:p-4">
-                              <div className="text-gray-500 text-xs md:text-sm mb-1">{metric.label}</div>
-                              <div className={`font-mono font-semibold text-sm md:text-base lg:text-lg ${metric.color}`}>
-                                {metric.value}
-                              </div>
+                        {metrics ? [
+                          { label: 'Win Rate', value: `${(metrics.winRate * 100).toFixed(2)}%`, color: 'text-emerald-400' },
+                          { label: 'Avg Trade Size', value: `$${metrics.avgTradeSize.toFixed(2)}`, color: 'text-cyan-400' },
+                          { label: 'Risk/Reward', value: `1:${metrics.riskReward.toFixed(2)}`, color: 'text-purple-400' },
+                          { label: 'Max Drawdown', value: `${metrics.maxDrawdown.toFixed(2)}%`, color: 'text-red-400' },
+                          { label: 'Profit Factor', value: metrics.profitFactor.toFixed(2), color: 'text-green-400' },
+                          { label: 'Sharpe Ratio', value: metrics.sharpeRatio.toFixed(2), color: 'text-yellow-400' },
+                        ].map((metric, index) => (
+                          <div key={index} className="bg-gray-900/50 border border-gray-800 rounded-lg p-3 md:p-4">
+                            <div className="text-gray-500 text-xs md:text-sm mb-1">{metric.label}</div>
+                            <div className={`font-mono font-semibold text-sm md:text-base lg:text-lg ${metric.color}`}>
+                              {metric.value}
                             </div>
-                          ));
-                        })()}
+                          </div>
+                        )) : (
+                          <div className="col-span-full text-center py-8 text-gray-500">
+                            <div className="animate-spin w-8 h-8 border-2 border-cyan-400 border-t-transparent rounded-full mx-auto mb-4"></div>
+                            <div>Loading metrics...</div>
+                          </div>
+                        )}
                       </div>
                     </div>
                     

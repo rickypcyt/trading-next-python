@@ -4,6 +4,7 @@ import { Activity, AlertTriangle, ArrowDown, ArrowUp, Bell, DollarSign, External
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import Analisis from './components/Analisis';
 import EngineControlPanel from './components/EngineControlPanel';
 import TradesTable from './components/TradesTable';
 import TradingViewWidget from './components/TradingViewWidget';
@@ -115,7 +116,6 @@ export default function TradingDashboard() {
   const [engines, setEngines] = useState<Record<string, Engine>>({});
   const [metrics, setMetrics] = useState<Metric | null>(null);
   const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [equityData, setEquityData] = useState<EquityPoint[]>([]);
   const [wsStatus, setWsStatus] = useState<string>('disconnected');
   const [selectedIntelligentStrategies, setSelectedIntelligentStrategies] = useState<string[]>([
     'MACD_Signal', 'MA_Cross', 'RSI_Divergence', 'Bollinger_Bands', 'Volume_Breakout', 'Support_Resistance'
@@ -157,20 +157,18 @@ export default function TradingDashboard() {
 
   const fetchAllData = useCallback(async () => {
     try {
-      const [tradesRes, metricsRes, alertsRes, equityRes, modesRes, enginesRes] = await Promise.all([
+      const [tradesRes, metricsRes, alertsRes, modesRes, enginesRes] = await Promise.all([
         fetch('http://127.0.0.1:5000/trades'),
         fetch('http://127.0.0.1:5000/metrics'),
         fetch('http://127.0.0.1:5000/alerts'),
-        fetch('http://127.0.0.1:5000/equity'),
         fetch('http://127.0.0.1:5000/binance/modes').catch(() => null), // Puede no existir aún
         fetch('http://127.0.0.1:5000/engines')
       ]);
 
-      const [tradesData, metricsData, alertsData, equityDataResponse, modesData, enginesData] = await Promise.all([
+      const [tradesData, metricsData, alertsData, modesData, enginesData] = await Promise.all([
         tradesRes.json(),
         metricsRes.json(),
         alertsRes.json(),
-        equityRes.json(),
         modesRes?.json().catch(() => ({ modes: {} })), // Default si no existe
         enginesRes.json()
       ]);
@@ -192,7 +190,6 @@ export default function TradingDashboard() {
       
       setMetrics(metricsData[0] || null);
       setAlerts(alertsData);
-      setEquityData(equityDataResponse.reverse());
       setTradingModes(modesData.modes || {});
     } catch (error) {
       console.error('Error fetching data:', error);
@@ -632,6 +629,54 @@ const handleDeleteAllTrades = async () => {
   };
 
 
+  // Calculate real equity curve from all trades
+  const realEquityData = useMemo(() => {
+    if (allTrades.length === 0) return [];
+    
+    // Sort trades by timestamp
+    const sortedTrades = [...allTrades].sort((a, b) => 
+      new Date(a.timestamp_entry).getTime() - new Date(b.timestamp_entry).getTime()
+    );
+    
+    // Calculate cumulative P&L over time
+    const equityPoints: EquityPoint[] = [];
+    let runningCapital = 100; // Starting capital
+    let lastDate = '';
+    
+    // Add initial point
+    if (sortedTrades.length > 0) {
+      const firstTradeDate = new Date(sortedTrades[0].timestamp_entry);
+      firstTradeDate.setHours(0, 0, 0, 0); // Start of day
+      equityPoints.push({
+        timestamp: firstTradeDate.toISOString(),
+        capital: Math.round(100 * 100) / 100 // Redondear a 2 decimales
+      });
+    }
+    
+    sortedTrades.forEach(trade => {
+      runningCapital += trade.pnl;
+      const tradeDate = new Date(trade.timestamp_exit);
+      
+      // Only add one point per day (the last trade of the day)
+      const dateStr = tradeDate.toDateString();
+      if (dateStr !== lastDate) {
+        equityPoints.push({
+          timestamp: trade.timestamp_exit,
+          capital: Math.round(runningCapital * 100) / 100 // Redondear a 2 decimales
+        });
+        lastDate = dateStr;
+      } else {
+        // Update the last point for the same day
+        if (equityPoints.length > 0) {
+          equityPoints[equityPoints.length - 1].capital = Math.round(runningCapital * 100) / 100; // Redondear a 2 decimales
+          equityPoints[equityPoints.length - 1].timestamp = trade.timestamp_exit;
+        }
+      }
+    });
+    
+    return equityPoints;
+  }, [allTrades]);
+
   const totalPnL = useMemo(
     () => allTrades.reduce((sum, trade) => sum + trade.pnl, 0),
     [allTrades]
@@ -695,13 +740,6 @@ const handleDeleteAllTrades = async () => {
         return { color: 'text-gray-400', bg: 'bg-gray-900/20', border: 'border-gray-500', icon: 'ℹ️' };
     }
   };
-
-  const alertCounts = useMemo(() => {
-    return alerts.reduce<Record<string, number>>((acc, alert) => {
-      acc[alert.type] = (acc[alert.type] || 0) + 1;
-      return acc;
-    }, {});
-  }, [alerts]);
 
           return (
     <div className="min-h-screen bg-black text-white">
@@ -821,6 +859,21 @@ const handleDeleteAllTrades = async () => {
           </>
         )}
       </div>
+
+      {/* Engine Control Panel */}
+      <EngineControlPanel
+        className="mb-8"
+        onGenerateBinanceTrade={handleGenerateBinanceTrade}
+        onClearTrades={handleDeleteAllTrades}
+        onResetStatus={handleClearAllStatus}
+        onGenerateIntelligentTrade={handleGenerateIntelligentTrade}
+        selectedIntelligentStrategies={selectedIntelligentStrategies}
+        setSelectedIntelligentStrategies={setSelectedIntelligentStrategies}
+        tradingModes={tradingModes}
+        binanceModeStatus={binanceModeStatus}
+        selectedModes={selectedModes}
+        onBinanceModeControl={handleBinanceModeControl}
+      />
 
       {/* TradingView Widget */}
       <div className="mb-8 bg-gray-950/50 border border-gray-800 rounded-lg p-6 backdrop-blur-sm">
@@ -1027,22 +1080,6 @@ const handleDeleteAllTrades = async () => {
         )}
       </div>
 
-      {/* Engine Control Panel */}
-      <EngineControlPanel
-        className="mb-8"
-        onGenerateBinanceTrade={handleGenerateBinanceTrade}
-        onClearTrades={handleDeleteAllTrades}
-        onResetStatus={handleClearAllStatus}
-        onGenerateIntelligentTrade={handleGenerateIntelligentTrade}
-        selectedIntelligentStrategies={selectedIntelligentStrategies}
-        setSelectedIntelligentStrategies={setSelectedIntelligentStrategies}
-        tradingModes={tradingModes}
-        binanceModeStatus={binanceModeStatus}
-        selectedModes={selectedModes}
-        onBinanceModeControl={handleBinanceModeControl}
-      />
-
-
       {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
         {/* Equity Curve */}
@@ -1061,7 +1098,7 @@ const handleDeleteAllTrades = async () => {
             </div>
           </div>
           <ResponsiveContainer width="100%" height={400}>
-            <AreaChart data={equityData}>
+            <AreaChart data={realEquityData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1F2937" />
               <XAxis 
                 dataKey="timestamp" 
@@ -1073,7 +1110,7 @@ const handleDeleteAllTrades = async () => {
                 stroke="#4B5563"
                 tick={{ fontSize: 12 }}
                 tickFormatter={(value) => `$${value}`}
-                domain={[95, 'dataMax + 5']} // Empezar desde $95 y mostrar hasta 5% por encima del máximo
+                domain={['dataMin - 5', 'dataMax + 5']} // Ajuste automático con margen
               />
               <Tooltip 
                 contentStyle={{ 
@@ -1091,16 +1128,6 @@ const handleDeleteAllTrades = async () => {
                   <stop offset="95%" stopColor="#06B6D4" stopOpacity={0.1}/>
                 </linearGradient>
               </defs>
-              {/* Línea de referencia del capital inicial */}
-              <Area
-                type="monotone"
-                dataKey={() => 100}
-                stroke="#10B981"
-                strokeDasharray="5 5"
-                strokeWidth={1}
-                fill="none"
-                dot={false}
-              />
               <Area 
                 type="monotone" 
                 dataKey="capital" 
@@ -1144,6 +1171,9 @@ const handleDeleteAllTrades = async () => {
           </div>
         </div>
       </div>
+
+      {/* Analysis Section */}
+      <Analisis trades={allTrades} engines={engines} className="mb-8" />
 
       
       </div>

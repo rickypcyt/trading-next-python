@@ -12,16 +12,18 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@types/react-beautiful-dnd": "^13.1.8",
+    "chart.js": "^4.4.2",
+    "concurrently": "^9.1.0",
+    "date-fns": "^4.1.0",
+    "lucide-react": "^0.468.0",
     "next": "16.1.6",
     "react": "19.2.3",
-    "react-dom": "19.2.3",
-    "concurrently": "^9.1.0",
-    "react-toastify": "^10.0.6",
-    "chart.js": "^4.4.2",
+    "react-beautiful-dnd": "^13.1.1",
     "react-chartjs-2": "^5.2.0",
-    "recharts": "^2.13.3",
-    "date-fns": "^4.1.0",
-    "lucide-react": "^0.468.0"
+    "react-dom": "19.2.3",
+    "react-toastify": "^10.0.6",
+    "recharts": "^2.13.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
