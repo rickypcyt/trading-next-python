@@ -54,7 +54,7 @@ class TradingSimulator:
         profit_factor = gross_profit / (gross_loss + 0.0001)  # Evitar división por cero
         
         return Metric(
-            timestamp=datetime.now().isoformat(),
+            timestamp=datetime.utcnow(),
             win_rate=round(win_rate, 4),
             sharpe=round(sharpe, 4),
             max_drawdown=round(self.current_drawdown, 2),
@@ -68,7 +68,7 @@ class TradingSimulator:
         # Alerta de pérdida grande (más de 2% del capital = $2)
         if trade.pnl < -self.current_capital * 0.02:  # Pérdida > $2
             alerts.append(Alert(
-                timestamp=datetime.now().isoformat(),
+                timestamp=datetime.utcnow(),
                 type="LOSS_WARNING",
                 message=f"Large loss detected: ${trade.pnl:.2f} on {trade.symbol} ({(trade.pnl/self.current_capital*100):.1f}%)"
             ))
@@ -76,7 +76,7 @@ class TradingSimulator:
         # Alerta de drawdown (más de 10% del capital = $10)
         if self.current_drawdown > 10:  # Drawdown > $10
             alerts.append(Alert(
-                timestamp=datetime.now().isoformat(),
+                timestamp=datetime.utcnow(),
                 type="DRAWDOWN_ALERT",
                 message=f"Max drawdown exceeded: {self.current_drawdown:.2f}% (${self.current_capital * self.current_drawdown/100:.2f})"
             ))
@@ -85,7 +85,7 @@ class TradingSimulator:
         price_change = abs(trade.exit_price - trade.entry_price) / trade.entry_price
         if price_change > 0.03:  # Cambio de precio > 3%
             alerts.append(Alert(
-                timestamp=datetime.now().isoformat(),
+                timestamp=datetime.utcnow(),
                 type="VOLATILITY_ALERT",
                 message=f"High volatility on {trade.symbol}: {price_change*100:.2f}%"
             ))
@@ -93,7 +93,7 @@ class TradingSimulator:
         # Alerta de ganancia grande (más de 5% del capital = $5)
         if trade.pnl > self.current_capital * 0.05:  # Ganancia > $5
             alerts.append(Alert(
-                timestamp=datetime.now().isoformat(),
+                timestamp=datetime.utcnow(),
                 type="PROFIT_ALERT",
                 message=f"Large profit: ${trade.pnl:.2f} on {trade.symbol} ({(trade.pnl/self.current_capital*100):.1f}%)"
             ))
@@ -103,7 +103,7 @@ class TradingSimulator:
     def update_equity(self):
         """Actualiza la curva de capital"""
         equity = EquityCurve(
-            timestamp=datetime.now().isoformat(),
+            timestamp=datetime.utcnow(),
             capital=round(self.current_capital, 2)
         )
         return equity

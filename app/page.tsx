@@ -2,7 +2,7 @@
 
 import { Activity, AlertTriangle, ArrowDown, ArrowUp, Bell, DollarSign, ExternalLink, TrendingDown, TrendingUp } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import Analisis from './components/Analisis';
 import EngineControlPanel from './components/EngineControlPanel';
@@ -388,174 +388,199 @@ export default function TradingDashboard() {
     }
   }, [selectedIntelligentStrategies]);
 
-  useEffect(() => {
-    fetchAllData();
+  const addTradeFromEventRef = useRef(addTradeFromEvent);
+  const clearTradesStateRef = useRef(clearTradesState);
+  const removeTradeByIdRef = useRef(removeTradeById);
+  const fetchAllDataRef = useRef(fetchAllData);
 
-    // WebSocket connection with auto-reconnect
+  useEffect(() => {
+    addTradeFromEventRef.current = addTradeFromEvent;
+  }, [addTradeFromEvent]);
+
+  useEffect(() => {
+    clearTradesStateRef.current = clearTradesState;
+  }, [clearTradesState]);
+
+  useEffect(() => {
+    removeTradeByIdRef.current = removeTradeById;
+  }, [removeTradeById]);
+
+  useEffect(() => {
+    fetchAllDataRef.current = fetchAllData;
+  }, [fetchAllData]);
+
+  useEffect(() => {
+    fetchAllDataRef.current?.();
+
     let ws: WebSocket | null = null;
     let reconnectAttempts = 0;
     const maxReconnectAttempts = 5;
-    let reconnectTimeout: NodeJS.Timeout;
+    let reconnectTimeout: NodeJS.Timeout | null = null;
 
     const connectWebSocket = () => {
       try {
         ws = new WebSocket('ws://127.0.0.1:5000/ws');
-        
+
         ws.onopen = () => {
           setWsStatus('connected');
           reconnectAttempts = 0;
           toast.success('WebSocket connected', { autoClose: 2000, toastId: 'ws-connected' });
         };
-        
+
         ws.onmessage = (event) => {
           const data = JSON.parse(event.data);
-          
+
           switch (data.type) {
             case 'binance_simulation_started':
               setStoredStatus('binance', 'running');
               toast.success('💎 Binance real-time simulation started', { toastId: 'binance-started' });
-              // Actualizar engines en tiempo real
               setEngines(prev => ({
                 ...prev,
                 binance: { ...prev.binance, status: 'running' }
               }));
               break;
-              
+
             case 'binance_simulation_stopped':
               setStoredStatus('binance', 'stopped');
               toast.error('⏹️ Binance simulation stopped', { toastId: 'binance-stopped' });
-              // Actualizar engines en tiempo real
               setEngines(prev => ({
                 ...prev,
                 binance: { ...prev.binance, status: 'idle' }
               }));
               break;
-              
+
             case 'intelligent_simulation_started':
               setStoredStatus('intelligent', 'running');
               toast.success('🧠 Intelligent simulation with technical analysis started', { toastId: 'intelligent-started' });
-              // Actualizar engines en tiempo real
               setEngines(prev => ({
                 ...prev,
                 intelligent: { ...prev.intelligent, status: 'running' }
               }));
               break;
-              
+
             case 'intelligent_simulation_stopped':
               setStoredStatus('intelligent', 'stopped');
               toast.error('⏹️ Intelligent simulation stopped', { toastId: 'intelligent-stopped' });
-              // Actualizar engines en tiempo real
               setEngines(prev => ({
                 ...prev,
                 intelligent: { ...prev.intelligent, status: 'idle' }
               }));
               break;
-              
+
             case 'binance_mode_started':
-              // Add mode to selected modes
-              setSelectedModes(prev => [...prev.filter(m => m !== data.data.mode), data.data.mode]);
-              setStoredStatus('selected_binance_modes', [...selectedModes.filter(m => m !== data.data.mode), data.data.mode].join(','));
-              // Actualizar engines en tiempo real
-              setEngines(prev => ({
-                ...prev,
-                [`binance_${data.data.mode}`]: { 
-                  ...prev[`binance_${data.data.mode}`], 
-                  status: 'running',
-                  type: 'binance_mode',
-                  trades_generated: 0,
-                  errors: 0,
-                  last_activity: new Date().toISOString(),
-                  metadata: { mode: data.data.mode }
-                }
-              }));
+              if (data.data?.mode) {
+                const mode = data.data.mode;
+                setSelectedModes(prev => {
+                  const updated = [...prev.filter(m => m !== mode), mode];
+                  setStoredStatus('selected_binance_modes', updated.join(','));
+                  return updated;
+                });
+                setEngines(prev => ({
+                  ...prev,
+                  [`binance_${mode}`]: {
+                    ...prev[`binance_${mode}`],
+                    status: 'running',
+                    type: 'binance_mode',
+                    trades_generated: 0,
+                    errors: 0,
+                    last_activity: new Date().toISOString(),
+                    metadata: { mode }
+                  }
+                }));
+              }
               break;
-              
+
             case 'binance_mode_stopped':
-              // Remove mode from selected modes
-              setSelectedModes(prev => prev.filter(m => m !== data.data.mode));
-              setStoredStatus('selected_binance_modes', selectedModes.filter(m => m !== data.data.mode).join(','));
-              // Actualizar engines en tiempo real
-              setEngines(prev => ({
-                ...prev,
-                [`binance_${data.data.mode}`]: { 
-                  ...prev[`binance_${data.data.mode}`], 
-                  status: 'idle'
-                }
-              }));
+              if (data.data?.mode) {
+                const mode = data.data.mode;
+                setSelectedModes(prev => {
+                  const updated = prev.filter(m => m !== mode);
+                  setStoredStatus('selected_binance_modes', updated.join(','));
+                  return updated;
+                });
+                setEngines(prev => ({
+                  ...prev,
+                  [`binance_${mode}`]: {
+                    ...prev[`binance_${mode}`],
+                    status: 'idle'
+                  }
+                }));
+              }
               break;
-              
+
             case 'engine_started':
-              // Actualización genérica de engine iniciado
-              setEngines(prev => ({
-                ...prev,
-                [data.data.engine_id]: { 
-                  ...prev[data.data.engine_id], 
-                  status: 'running',
-                  last_activity: new Date().toISOString()
-                }
-              }));
+              if (data.data?.engine_id) {
+                setEngines(prev => ({
+                  ...prev,
+                  [data.data.engine_id]: {
+                    ...prev[data.data.engine_id],
+                    status: 'running',
+                    last_activity: new Date().toISOString()
+                  }
+                }));
+              }
               break;
-              
+
             case 'engine_stopped':
-              // Actualización genérica de engine detenido
-              setEngines(prev => ({
-                ...prev,
-                [data.data.engine_id]: { 
-                  ...prev[data.data.engine_id], 
-                  status: 'idle',
-                  last_activity: new Date().toISOString()
-                }
-              }));
+              if (data.data?.engine_id) {
+                setEngines(prev => ({
+                  ...prev,
+                  [data.data.engine_id]: {
+                    ...prev[data.data.engine_id],
+                    status: 'idle',
+                    last_activity: new Date().toISOString()
+                  }
+                }));
+              }
               break;
-              
+
             case 'binance_mode_trade_generated':
-              toast.info(`📊 Binance ${data.data.mode} trade: ${data.data.pnl > 0 ? '+' : ''}$${data.data.pnl.toFixed(2)}`, {
-                toastId: `binance-${data.data.mode}-trade-${data.data.trade_id}`,
-              });
-              if (data.data) addTradeFromEvent(data.data);
+              if (data.data) {
+                const pnlValue = Number(data.data.pnl ?? 0);
+                const sign = pnlValue >= 0 ? '+' : '-';
+                toast.info(`📊 Binance ${data.data.mode} trade: ${sign}$${Math.abs(pnlValue).toFixed(2)}`, {
+                  toastId: `binance-${data.data.mode}-trade-${data.data.trade_id}`,
+                });
+                addTradeFromEventRef.current?.(data.data);
+              }
               break;
-              
+
             case 'trade_added':
-              if (data.data) addTradeFromEvent(data.data);
-              break;
             case 'real_trade_generated':
-              if (data.data) addTradeFromEvent(data.data);
-              break;
             case 'monthly_target_trade_generated':
-              if (data.data) addTradeFromEvent(data.data);
+            case 'intelligent_trade_generated':
+              if (data.data) addTradeFromEventRef.current?.(data.data);
               break;
+
             case 'equity_updated':
             case 'metrics_updated':
             case 'alert_added':
-            case 'intelligent_trade_generated':
-              if (data.data && (data.type === 'intelligent_trade_generated')) {
-                addTradeFromEvent(data.data);
-              } else {
-                fetchAllData(); // Mantener sincronización para otras métricas
-              }
+              fetchAllDataRef.current?.();
               break;
+
             case 'trade_deleted':
               if (data.data?.trade_id !== undefined) {
-                removeTradeById(Number(data.data.trade_id));
+                removeTradeByIdRef.current?.(Number(data.data.trade_id));
               }
               break;
+
             case 'trades_cleared':
-              clearTradesState();
+              clearTradesStateRef.current?.();
               break;
           }
         };
-        
+
         ws.onclose = () => {
           setWsStatus('disconnected');
           toast.error('WebSocket disconnected', { toastId: 'ws-disconnected' });
-          
+
           if (reconnectAttempts < maxReconnectAttempts) {
-            reconnectAttempts++;
+            reconnectAttempts += 1;
             const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 5000);
-            reconnectTimeout = setTimeout(() => connectWebSocket(), delay);
+            reconnectTimeout = setTimeout(connectWebSocket, delay);
           }
         };
-        
+
         ws.onerror = (error) => {
           console.warn('WebSocket connection error - will retry:', error);
           setWsStatus('error');
@@ -572,7 +597,7 @@ export default function TradingDashboard() {
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       if (ws) ws.close();
     };
-  }, [fetchAllData, selectedModes, addTradeFromEvent, clearTradesState, removeTradeById]);
+  }, []);
 
   const handleBinanceModeControl = async (action: 'select' | 'generate', mode: string) => {
     try {

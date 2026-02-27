@@ -54,24 +54,16 @@ def is_task_running(task):
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     websocket_connections.add(websocket)
-    
-    # Notificar a todos los clientes que hay una nueva conexión
-    await notify_clients(json.dumps({"type": "refresh", "message": "New client connected"}))
-    
+
     try:
         while True:
             await websocket.receive_text()  # Keep connection alive
     except WebSocketDisconnect:
-        # Remover conexión de forma segura
-        if websocket in websocket_connections:
-            websocket_connections.remove(websocket)
-        # Notificar que un cliente se desconectó
-        await notify_clients(json.dumps({"type": "refresh", "message": "Client disconnected"}))
+        pass
     except Exception as e:
-        # Manejar otros errores de conexión
-        if websocket in websocket_connections:
-            websocket_connections.remove(websocket)
         print(f"WebSocket error: {e}")
+    finally:
+        websocket_connections.discard(websocket)
 
 async def notify_clients(message: str):
     """Notificar a todos los clientes conectados"""

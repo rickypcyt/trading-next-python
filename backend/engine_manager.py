@@ -397,10 +397,17 @@ class CentralEngineManager:
     def _create_notification_wrapper(self):
         """Crear wrapper para notificaciones"""
         async def notification_wrapper(data):
+            payload = data
+            if not isinstance(payload, str):
+                def _serialize(obj):
+                    if isinstance(obj, datetime):
+                        return obj.isoformat()
+                    return str(obj)
+                payload = json.dumps(payload, default=_serialize)
             if self.notification_callback:
-                await self.notification_callback(data)
+                await self.notification_callback(payload)
             else:
-                print(f"📢 Engine notification: {data}")
+                print(f"📢 Engine notification: {payload}")
         return notification_wrapper
     
     async def _notify_engine_status(self, engine_id: str, status: str):
