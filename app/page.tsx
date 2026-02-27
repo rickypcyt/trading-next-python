@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import Analisis from './components/Analisis';
 import EngineControlPanel from './components/EngineControlPanel';
+import ManualTradesLog from './components/ManualTradesLog';
 import TradesTable from './components/TradesTable';
 import TradingViewWidget from './components/TradingViewWidget';
 import { toast } from 'react-toastify';
@@ -1082,6 +1083,9 @@ export default function TradingDashboard() {
         selectedModes={selectedModes}
         onBinanceModeControl={handleBinanceModeControl}
       />
+
+      {/* Manual Trades Log */}
+      <ManualTradesLog />
 
       {/* TradingView Widget */}
       <div className="mb-8 bg-gray-950/50 border border-gray-800 rounded-lg p-6 backdrop-blur-sm">

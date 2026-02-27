@@ -1,11 +1,12 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 import json
 import asyncio
 from datetime import datetime
 from typing import List, Dict, Any
-from database import get_db, Trade, EquityCurve, Metric, Alert
+from database import get_db, Trade, EquityCurve, Metric, Alert, ManualTrade
 from simulator import TradingSimulator
 from binance_simulator import BinanceDataSimulator, run_real_time_simulation
 from binance_mode_simulator import BinanceModeSimulator, run_binance_mode_simulation, TRADING_MODES
@@ -17,6 +18,7 @@ from trade_logger import get_trade_logger
 from portfolio_manager import get_portfolio_manager
 from engine_manager import engine_manager
 from engine_endpoints import register_engine_endpoints
+from price_monitor import price_monitor
 
 app = FastAPI()
 
@@ -45,6 +47,28 @@ market_alerts_task = None  # Nueva tarea para alertas de mercado
 
 # Variable global para estrategias seleccionadas del Intelligent Simulator
 selected_intelligent_strategies = ['MACD_Signal', 'MA_Cross', 'RSI_Divergence', 'Bollinger_Bands', 'Volume_Breakout', 'Support_Resistance']
+
+# Variable global para el price monitor
+price_monitor_task = None
+
+@app.on_event("startup")
+async def startup_event():
+    """Inicializar servicios al iniciar la app"""
+    await engine_manager.initialize(notify_clients)
+    await price_monitor.initialize(notify_clients)
+    
+    # Iniciar monitoreo de precios
+    global price_monitor_task
+    price_monitor_task = asyncio.create_task(price_monitor.start_monitoring())
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Limpiar recursos al cerrar la app"""
+    await engine_manager.shutdown()
+    await price_monitor.stop_monitoring()
+    
+    if price_monitor_task:
+        price_monitor_task.cancel()
 
 
 def is_task_running(task):
@@ -538,9 +562,6 @@ async def start_intelligent_simulation():
     if is_task_running(intelligent_simulation_task):
         return {"status": "already_running"}
     
-    # Iniciar automáticamente solo el motor avanzado de Binance
-    asyncio.create_task(engine_manager.start_engine('binance_advanced'))
-    
     # Iniciar tarea de simulación inteligente en background
     intelligent_simulation_task = asyncio.create_task(
         run_intelligent_simulation(get_db, websocket_connections, notify_clients)
@@ -770,6 +791,186 @@ async def get_trades_log(db: Session = Depends(get_db)):
             "timestamp": datetime.now().isoformat()
         }
         
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# Manual Trades endpoints
+@app.get('/manual-trades')
+def get_manual_trades(db: Session = Depends(get_db)):
+    """Obtener todos los trades manuales del usuario"""
+    trades = db.query(ManualTrade).order_by(ManualTrade.timestamp.desc()).all()
+    return [
+        {
+            "id": t.id,
+            "timestamp": t.timestamp.isoformat(),
+            "symbol": t.symbol,
+            "action": t.action,
+            "quantity": t.quantity,
+            "price": t.price,
+            "total_amount": t.total_amount,
+            "status": t.status,
+            "notes": t.notes,
+            "exit_price": t.exit_price,
+            "exit_timestamp": t.exit_timestamp.isoformat() if t.exit_timestamp else None,
+            "pnl": t.pnl,
+            "created_by": t.created_by
+        }
+        for t in trades
+    ]
+
+class ManualTradeRequest(BaseModel):
+    symbol: str
+    action: str
+    quantity: float
+    price: float
+    notes: str = ""
+
+@app.post('/manual-trades')
+async def create_manual_trade(
+    request: ManualTradeRequest,
+    db: Session = Depends(get_db)
+):
+    """Crear un nuevo trade manual"""
+    try:
+        total_amount = request.quantity * request.price
+        
+        manual_trade = ManualTrade(
+            symbol=request.symbol,
+            action=request.action,
+            quantity=request.quantity,
+            price=request.price,
+            total_amount=total_amount,
+            status="executed",
+            notes=request.notes,
+            created_by="user"
+        )
+        
+        db.add(manual_trade)
+        db.commit()
+        db.refresh(manual_trade)
+        
+        # Agregar al monitor de precios
+        await price_monitor.add_trade(
+            manual_trade.id,
+            request.symbol,
+            request.action,
+            request.price,
+            request.quantity
+        )
+        
+        # Notificar via WebSocket
+        await notify_clients(json.dumps({
+            "type": "manual_trade_created",
+            "message": f"Manual trade {request.action} {request.quantity} {request.symbol} at ${request.price}",
+            "data": {
+                "id": manual_trade.id,
+                "symbol": request.symbol,
+                "action": request.action,
+                "quantity": request.quantity,
+                "price": request.price,
+                "total_amount": total_amount
+            }
+        }))
+        
+        return {"status": "success", "trade_id": manual_trade.id}
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+class CloseTradeRequest(BaseModel):
+    exit_price: float
+
+@app.post('/manual-trades/{trade_id}/close')
+async def close_manual_trade(
+    trade_id: int,
+    request: CloseTradeRequest,
+    db: Session = Depends(get_db)
+):
+    """Cerrar un trade manual y calcular P&L"""
+    try:
+        trade = db.query(ManualTrade).filter(ManualTrade.id == trade_id).first()
+        if not trade:
+            return {"status": "error", "message": "Trade not found"}
+        
+        trade.exit_price = request.exit_price
+        trade.exit_timestamp = datetime.utcnow()
+        
+        # Calcular P&L
+        if trade.action == "BUY":
+            trade.pnl = (request.exit_price - trade.price) * trade.quantity
+        else:  # SELL
+            trade.pnl = (trade.price - request.exit_price) * trade.quantity
+        
+        trade.status = "closed"
+        db.commit()
+        
+        # Remover del monitor de precios
+        await price_monitor.remove_trade(trade_id)
+        
+        # Notificar via WebSocket
+        await notify_clients(json.dumps({
+            "type": "manual_trade_closed",
+            "message": f"Manual trade closed with P&L: ${trade.pnl:.2f}",
+            "data": {
+                "id": trade.id,
+                "symbol": trade.symbol,
+                "pnl": trade.pnl,
+                "exit_price": request.exit_price
+            }
+        }))
+        
+        return {"status": "success", "pnl": trade.pnl}
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.delete('/manual-trades/{trade_id}')
+async def delete_manual_trade(trade_id: int, db: Session = Depends(get_db)):
+    """Eliminar un trade manual"""
+    try:
+        trade = db.query(ManualTrade).filter(ManualTrade.id == trade_id).first()
+        if not trade:
+            return {"status": "error", "message": "Trade not found"}
+        
+        db.delete(trade)
+        db.commit()
+        
+        await notify_clients(json.dumps({
+            "type": "manual_trade_deleted",
+            "message": f"Manual trade {trade_id} deleted"
+        }))
+        
+        return {"status": "success"}
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get('/manual-trades/status')
+async def get_manual_trades_status():
+    """Obtener estado actual de trades manuales con precios en tiempo real"""
+    try:
+        trades_status = await price_monitor.get_all_trades_status()
+        return {
+            "status": "success",
+            "trades": trades_status,
+            "count": len(trades_status),
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get('/manual-trades/{trade_id}/status')
+async def get_manual_trade_status(trade_id: int):
+    """Obtener estado de un trade manual específico"""
+    try:
+        trade_status = await price_monitor.get_trade_status(trade_id)
+        if trade_status:
+            return {
+                "status": "success",
+                "trade": trade_status
+            }
+        else:
+            return {"status": "error", "message": "Trade not found or not active"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 

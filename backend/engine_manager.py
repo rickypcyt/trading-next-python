@@ -84,7 +84,7 @@ class CentralEngineManager:
                 "strategies": ["market_making", "scalping", "grid_trading", "mean_reversion", "breakout_momentum"],
                 "description": "Advanced Binance trading with market making strategies",
                 "user_favorite": True,  # Marcar como favorito del usuario
-                "protected": True  # No se puede detener
+                "protected": False  # Ahora se puede detener
             }
         )
     
@@ -446,18 +446,15 @@ class CentralEngineManager:
         """Apagar todos los engines"""
         print("🛑 Shutting down all engines...")
         
-        # Cancelar todas las tareas activas excepto binance_advanced
+        # Cancelar todas las tareas activas
         for engine_id in list(self.active_tasks.keys()):
-            if engine_id != "binance_advanced":  # Mantener el favorito corriendo
-                await self.stop_engine(engine_id)
+            await self.stop_engine(engine_id)
         
-        print("⭐ binance_advanced engine kept running (user's favorite)")
+        print("✅ All engines shut down")
         
         # Cerrar sesión de base de datos
         if self.db_session:
             self.db_session.close()
-        
-        print("✅ All engines shut down (except protected ones)")
 
 # Instancia global del gestor
 engine_manager = CentralEngineManager()

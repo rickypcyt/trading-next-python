@@ -48,25 +48,52 @@ class BinancePriceManager:
         try:
             for symbol in self.symbols:
                 if self.use_fallback:
-                    price = self._get_fallback_price(symbol)
+                    # Usar precios simulados
+                    base_prices = {'BTCUSDT': 45000, 'ETHUSDT': 3000, 'SOLUSDT': 150, 'XRPUSDT': 1.2, 'ADAUSDT': 0.5, 'BNBUSDT': 400}
+                    price = base_prices.get(symbol, 100) * (1 + random.uniform(-0.05, 0.05))
                 else:
-                    try:
-                        ticker = self.client.get_symbol_ticker(symbol=symbol)
-                        price = float(ticker['price'])
-                    except Exception as e:
-                        print(f"❌ Error getting price for {symbol}: {e}" )
-                        self.use_fallback = True
-                        price = self._get_fallback_price(symbol)
+                    # Usar API real de Binance
+                    ticker = self.client.get_symbol_ticker(symbol=symbol)
+                    price = float(ticker['price'])
+                
                 prices[symbol] = price
-                self.prices[symbol] = price
-                self.last_update[symbol] = datetime.now()
+                self.last_update[symbol] = datetime.utcnow()
+                
         except Exception as e:
             print(f"❌ Error getting prices: {e}")
-            self.use_fallback = True
+            # Fallback a precios simulados
+            base_prices = {'BTCUSDT': 45000, 'ETHUSDT': 3000, 'SOLUSDT': 150, 'XRPUSDT': 1.2, 'ADAUSDT': 0.5, 'BNBUSDT': 400}
             for symbol in self.symbols:
-                price = self._get_fallback_price(symbol)
+                prices[symbol] = base_prices.get(symbol, 100) * (1 + random.uniform(-0.05, 0.05))
+        
+        return prices
+    
+    async def get_prices_for_symbols(self, symbols: List[str]) -> Dict[str, float]:
+        """Obtener precios para símbolos específicos"""
+        if not self.client and not self.use_fallback:
+            self.initialize_client()
+        
+        prices = {}
+        try:
+            for symbol in symbols:
+                if self.use_fallback:
+                    # Usar precios simulados
+                    base_prices = {'BTCUSDT': 45000, 'ETHUSDT': 3000, 'SOLUSDT': 150, 'XRPUSDT': 1.2, 'ADAUSDT': 0.5, 'BNBUSDT': 400}
+                    price = base_prices.get(symbol, 100) * (1 + random.uniform(-0.05, 0.05))
+                else:
+                    # Usar API real de Binance
+                    ticker = self.client.get_symbol_ticker(symbol=symbol)
+                    price = float(ticker['price'])
+                
                 prices[symbol] = price
-                self.last_update[symbol] = datetime.now()
+                self.last_update[symbol] = datetime.utcnow()
+                
+        except Exception as e:
+            print(f"❌ Error getting prices for symbols {symbols}: {e}")
+            # Fallback a precios simulados
+            base_prices = {'BTCUSDT': 45000, 'ETHUSDT': 3000, 'SOLUSDT': 150, 'XRPUSDT': 1.2, 'ADAUSDT': 0.5, 'BNBUSDT': 400}
+            for symbol in symbols:
+                prices[symbol] = base_prices.get(symbol, 100) * (1 + random.uniform(-0.05, 0.05))
         
         return prices
     

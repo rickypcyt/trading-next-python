@@ -83,6 +83,31 @@ class Alert(Base):
     type = Column(String)
     message = Column(Text)
 
+class ManualTrade(Base):
+    __tablename__ = "manual_trades"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    symbol = Column(String, index=True)
+    
+    # Información del trade manual
+    action = Column(String)  # BUY/SELL
+    quantity = Column(Float)
+    price = Column(Float)
+    total_amount = Column(Float)
+    
+    # Estado y notas
+    status = Column(String)  # executed, pending, cancelled
+    notes = Column(Text)     # Notas del usuario
+    
+    # Resultados (si se cierra)
+    exit_price = Column(Float, nullable=True)
+    exit_timestamp = Column(DateTime, nullable=True)
+    pnl = Column(Float, nullable=True)
+    
+    # Metadatos
+    created_by = Column(String)  # "user" para distinguir de simuladores
+
 # Create tables
 Base.metadata.create_all(bind=engine)
 
