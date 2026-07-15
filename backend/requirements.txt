@@ -5,6 +5,6 @@ sqlalchemy==2.0.36
 python-binance==1.0.19
 python-dotenv==1.0.1
 ccxt==4.2.25
-pandas==2.2.3
-pandas_ta==0.3.14b0
+pandas==2.3.2
+pandas_ta==0.4.71b0
 websocket-client==1.8.0

@@ -4,6 +4,13 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 import json
 import asyncio
+import sys
+
+if sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+if sys.stderr.encoding.lower() != 'utf-8':
+    sys.stderr.reconfigure(encoding='utf-8')
+
 from datetime import datetime
 from typing import List, Dict, Any
 from database import get_db, Trade, EquityCurve, Metric, Alert, ManualTrade

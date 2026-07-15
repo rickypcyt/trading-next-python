@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "concurrently --kill-others \"bun run dev:next\" \"bun run dev:backend\"",
     "dev:next": "bun next dev",
-    "dev:backend": "cd backend && source venv/bin/activate && python -m uvicorn app:app --host 127.0.0.1 --port 5000 --reload",
+    "dev:backend": "cd backend && ../.venv/Scripts/python.exe -m uvicorn app:app --host 127.0.0.1 --port 5000 --reload",
     "kill": "pkill -f 'uvicorn\\|next dev\\|python.*app.py' || true",
     "build": "next build",
     "start": "next start",
