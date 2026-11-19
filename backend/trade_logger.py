@@ -20,7 +20,7 @@ class TradeLogger:
             "entry_price": trade.entry_price,
             "size": trade.size,
             "direction": strategy_info.get("direction", "unknown") if strategy_info else "unknown",
-            "type": trade.type,
+            "type": trade.direction or strategy_info.get("direction", "unknown") if strategy_info else (trade.direction or "unknown"),
             "status": "OPEN",
             "reason": strategy_info.get("reason", "trade_generated") if strategy_info else "trade_generated",
             "market_conditions": strategy_info.get("market_conditions", {}) if strategy_info else {},
@@ -53,8 +53,10 @@ class TradeLogger:
             duration_seconds = (close_time - opened_time).total_seconds()
         
         # Calcular price movement
-        price_movement = ((trade.exit_price - trade.entry_price) / trade.entry_price) * 100
-        pnl_percentage = (trade.pnl / (trade.entry_price * trade.size)) * 100 if trade.entry_price * trade.size > 0 else 0
+        price_movement = 0.0
+        if trade.entry_price:
+            price_movement = ((trade.exit_price - trade.entry_price) / trade.entry_price) * 100
+        pnl_percentage = trade.pnl_percentage if hasattr(trade, 'pnl_percentage') else 0.0
         
         log_entry = {
             "timestamp": datetime.now().isoformat(),

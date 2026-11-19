@@ -3,13 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently --kill-others \"bun run dev:next\" \"bun run dev:backend\"",
-    "dev:next": "bun next dev",
+    "dev": "concurrently --kill-others \"npm run dev:next\" \"npm run dev:backend\"",
+    "dev:next": "next dev",
     "dev:backend": "cd backend && ../.venv/Scripts/python.exe -m uvicorn app:app --host 127.0.0.1 --port 5000 --reload",
-    "kill": "pkill -f 'uvicorn\\|next dev\\|python.*app.py' || true",
+    "kill": "node scripts/kill-dev.mjs",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run",
+    "test:ui": "vitest --ui"
   },
   "dependencies": {
     "@types/react-beautiful-dnd": "^13.1.8",
@@ -33,6 +35,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^2.1.8"
   }
 }

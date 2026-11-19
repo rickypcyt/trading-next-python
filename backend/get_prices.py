@@ -1,3 +1,4 @@
+import asyncio
 from binance.client import Client
 import os
 from dotenv import load_dotenv
@@ -18,35 +19,40 @@ else:
 # Lista de símbolos que quieres ver
 symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "BNBUSDT"]
 
-print("\n💰 Precios actuales de Binance:")
-print("=" * 40)
-
-try:
-    # Obtener precios actuales
-    for symbol in symbols:
-        ticker = client.get_symbol_ticker(symbol=symbol)
-        price = float(ticker['price'])
-        
-        # Formatear precio según su magnitud
-        if price >= 1000:
-            formatted_price = f"${price:,.2f}"
-        elif price >= 1:
-            formatted_price = f"${price:.4f}"
-        else:
-            formatted_price = f"${price:.6f}"
-        
-        print(f"{symbol:<10} {formatted_price:>15}")
-    
+async def main():
+    print("\n💰 Precios actuales de Binance:")
     print("=" * 40)
-    
-    # Obtener datos adicionales de BTC
-    btc_ticker = client.get_ticker(symbol="BTCUSDT")
-    print(f"\n📊 BTC/USDT 24h Stats:")
-    print(f"Cambio 24h: {float(btc_ticker['priceChangePercent']):.2f}%")
-    print(f"Volumen 24h: {float(btc_ticker['volume']):,.0f} BTC")
-    print(f"Alto 24h: ${float(btc_ticker['highPrice']):,.2f}")
-    print(f"Bajo 24h: ${float(btc_ticker['lowPrice']):,.2f}")
-    
-except Exception as e:
-    print(f"❌ Error obteniendo precios: {e}")
-    print("💡 Asegúrate de tener conexión a internet")
+
+    try:
+        # Obtener precios actuales sin bloquear el event loop
+        for symbol in symbols:
+            ticker = await asyncio.to_thread(client.get_symbol_ticker, symbol=symbol)
+            price = float(ticker['price'])
+
+            # Formatear precio según su magnitud
+            if price >= 1000:
+                formatted_price = f"${price:,.2f}"
+            elif price >= 1:
+                formatted_price = f"${price:.4f}"
+            else:
+                formatted_price = f"${price:.6f}"
+
+            print(f"{symbol:<10} {formatted_price:>15}")
+
+        print("=" * 40)
+
+        # Obtener datos adicionales de BTC
+        btc_ticker = await asyncio.to_thread(client.get_ticker, symbol="BTCUSDT")
+        print(f"\n📊 BTC/USDT 24h Stats:")
+        print(f"Cambio 24h: {float(btc_ticker['priceChangePercent']):.2f}%")
+        print(f"Volumen 24h: {float(btc_ticker['volume']):,.0f} BTC")
+        print(f"Alto 24h: ${float(btc_ticker['highPrice']):,.2f}")
+        print(f"Bajo 24h: ${float(btc_ticker['lowPrice']):,.2f}")
+
+    except Exception as e:
+        print(f"❌ Error obteniendo precios: {e}")
+        print("💡 Asegúrate de tener conexión a internet")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

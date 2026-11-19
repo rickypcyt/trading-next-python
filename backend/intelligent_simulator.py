@@ -52,8 +52,8 @@ class BinancePriceManager:
                     base_prices = {'BTCUSDT': 45000, 'ETHUSDT': 3000, 'SOLUSDT': 150, 'XRPUSDT': 1.2, 'ADAUSDT': 0.5, 'BNBUSDT': 400}
                     price = base_prices.get(symbol, 100) * (1 + random.uniform(-0.05, 0.05))
                 else:
-                    # Usar API real de Binance
-                    ticker = self.client.get_symbol_ticker(symbol=symbol)
+                    # Usar API real de Binance sin bloquear el event loop
+                    ticker = await asyncio.to_thread(self.client.get_symbol_ticker, symbol=symbol)
                     price = float(ticker['price'])
                 
                 prices[symbol] = price
@@ -81,8 +81,8 @@ class BinancePriceManager:
                     base_prices = {'BTCUSDT': 45000, 'ETHUSDT': 3000, 'SOLUSDT': 150, 'XRPUSDT': 1.2, 'ADAUSDT': 0.5, 'BNBUSDT': 400}
                     price = base_prices.get(symbol, 100) * (1 + random.uniform(-0.05, 0.05))
                 else:
-                    # Usar API real de Binance
-                    ticker = self.client.get_symbol_ticker(symbol=symbol)
+                    # Usar API real de Binance sin bloquear el event loop
+                    ticker = await asyncio.to_thread(self.client.get_symbol_ticker, symbol=symbol)
                     price = float(ticker['price'])
                 
                 prices[symbol] = price
@@ -97,7 +97,7 @@ class BinancePriceManager:
         
         return prices
     
-    def get_historical_data(self, symbol: str, interval: str = '1h', limit: int = 24) -> List[Dict]:
+    async def get_historical_data(self, symbol: str, interval: str = '1h', limit: int = 24) -> List[Dict]:
         """Obtener datos históricos OHLCV"""
         if not self.client and not self.use_fallback:
             self.initialize_client()
@@ -105,7 +105,8 @@ class BinancePriceManager:
         try:
             if self.use_fallback:
                 return self._generate_fallback_klines(symbol, limit)
-            klines = self.client.get_klines(
+            klines = await asyncio.to_thread(
+                self.client.get_klines,
                 symbol=symbol,
                 interval=interval,
                 limit=limit
@@ -229,9 +230,9 @@ class AdvancedTradingSimulator:
         self.losing_trades = len([t for t in trades if t.pnl <= 0])
         self.current_drawdown = max(0, (self.max_capital - self.current_capital) / self.max_capital * 100) if self.max_capital else 0
 
-    def update_technical_analysis(self, symbol: str):
+    async def update_technical_analysis(self, symbol: str):
         """Actualizar análisis técnico mejorado para un símbolo"""
-        data = self.price_manager.get_historical_data(symbol, '1h', 50)
+        data = await self.price_manager.get_historical_data(symbol, '1h', 50)
         if not data:
             return
         
@@ -347,13 +348,13 @@ class AdvancedTradingSimulator:
         else:
             return 'normal'
     
-    def generate_intelligent_trade(self, symbol: str = None) -> Optional[Trade]:
+    async def generate_intelligent_trade(self, symbol: str = None) -> Optional[Trade]:
         """Generar trade inteligente con Execution Engine realista"""
         if symbol is None:
             symbol = random.choice(self.price_manager.symbols)
         
         # Actualizar análisis técnico
-        self.update_technical_analysis(symbol)
+        await self.update_technical_analysis(symbol)
         
         if symbol not in self.technical_data:
             return None
@@ -674,7 +675,7 @@ class AdvancedTradingSimulator:
             prices = await self.price_manager.get_all_prices()
             
             # 2. Generar trade para símbolo aleatorio
-            trade = self.generate_intelligent_trade()
+            trade = await self.generate_intelligent_trade()
             
             if trade:
                 # 3. Guardar trade en base de datos

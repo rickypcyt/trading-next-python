@@ -1,3 +1,4 @@
+import asyncio
 from binance.client import Client
 from binance.enums import KLINE_INTERVAL_1HOUR, KLINE_INTERVAL_4HOUR, KLINE_INTERVAL_1DAY
 import os
@@ -21,10 +22,10 @@ else:
 # Lista de símbolos
 symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 
-def get_ohlcv_data(symbol, interval=KLINE_INTERVAL_1HOUR, limit=50):
+async def get_ohlcv_data(symbol, interval=KLINE_INTERVAL_1HOUR, limit=50):
     """Obtiene datos OHLCV y los convierte a DataFrame"""
     try:
-        klines = client.get_klines(symbol=symbol, interval=interval, limit=limit)
+        klines = await asyncio.to_thread(client.get_klines, symbol=symbol, interval=interval, limit=limit)
         
         data = []
         for k in klines:
@@ -114,32 +115,36 @@ def print_analysis(symbol, df):
         macd_signal = "📈 Cruce Alcista" if macd > 0 and prev['macd'] <= 0 else "📉 Cruce Bajista" if macd < 0 and prev['macd'] >= 0 else "➡️ Sin cruce"
         print(f"MACD: {macd:+.4f} {macd_signal}")
 
-# Obtener y analizar datos
-print("🕯 Obteniendo datos OHLCV históricos...")
+async def main():
+    print("🕯 Obteniendo datos OHLCV históricos...")
 
-for symbol in symbols:
+    for symbol in symbols:
+        print(f"\n{'='*60}")
+        print(f"📈 Analizando {symbol}")
+        print(f"{'='*60}")
+
+        # Obtener datos de 1 hora
+        df = await get_ohlcv_data(symbol, KLINE_INTERVAL_1HOUR, 50)
+
+        if df is not None:
+            # Calcular indicadores
+            df = calculate_indicators(df)
+
+            # Mostrar últimas 5 velas
+            print(f"\n🕯 Últimas 5 velas de {symbol}:")
+            print("Timestamp             Open     High      Low    Close    Volume")
+            print("-" * 70)
+            for _, row in df.tail(5).iterrows():
+                print(f"{row['timestamp'].strftime('%Y-%m-%d %H:%M')}  {row['open']:>8.2f}  {row['high']:>8.2f}  {row['low']:>8.2f}  {row['close']:>8.2f}  {row['volume']:>8.0f}")
+
+            # Análisis técnico
+            print_analysis(symbol, df)
+
     print(f"\n{'='*60}")
-    print(f"📈 Analizando {symbol}")
+    print("✅ Análisis completado")
+    print("💡 Usa estos datos para estrategias de trading automatizado")
     print(f"{'='*60}")
-    
-    # Obtener datos de 1 hora
-    df = get_ohlcv_data(symbol, KLINE_INTERVAL_1HOUR, 50)
-    
-    if df is not None:
-        # Calcular indicadores
-        df = calculate_indicators(df)
-        
-        # Mostrar últimas 5 velas
-        print(f"\n🕯 Últimas 5 velas de {symbol}:")
-        print("Timestamp             Open     High      Low    Close    Volume")
-        print("-" * 70)
-        for _, row in df.tail(5).iterrows():
-            print(f"{row['timestamp'].strftime('%Y-%m-%d %H:%M')}  {row['open']:>8.2f}  {row['high']:>8.2f}  {row['low']:>8.2f}  {row['close']:>8.2f}  {row['volume']:>8.0f}")
-        
-        # Análisis técnico
-        print_analysis(symbol, df)
 
-print(f"\n{'='*60}")
-print("✅ Análisis completado")
-print("💡 Usa estos datos para estrategias de trading automatizado")
-print(f"{'='*60}")
+
+if __name__ == "__main__":
+    asyncio.run(main())

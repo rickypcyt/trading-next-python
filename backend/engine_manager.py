@@ -1,11 +1,12 @@
 """
 Central Engine Manager - Coordina todos los motores de trading
 """
-from typing import Dict, List, Optional, Set
+from typing import Awaitable, Callable, Dict, List, Optional, Set
 from datetime import datetime
 from enum import Enum
 import asyncio
 import json
+import os
 
 from signal_interface import SignalEmitter, IntelligentSignalEmitter, BinanceModeSignalEmitter, MicroProfitSignalEmitter, SimulationSignalEmitter, ExecutionSignalEmitter
 from portfolio_manager import get_portfolio_manager
@@ -32,12 +33,11 @@ class CentralEngineManager:
         self.engines: Dict[str, Dict] = {}
         self.active_tasks: Dict[str, asyncio.Task] = {}
         self.notification_callback = None
-        self.db_session = None
+        self.db_factory = get_db
         
     async def initialize(self, notification_callback=None):
         """Inicializar el gestor con todos los engines disponibles"""
         self.notification_callback = notification_callback
-        self.db_session = next(get_db())
         
         # Registrar todos los engines disponibles
         await self._register_all_engines()
@@ -55,7 +55,7 @@ class CentralEngineManager:
         await self.register_engine(
             engine_id="intelligent",
             engine_type=EngineType.INTELLIGENT,
-            emitter=IntelligentSignalEmitter(self.db_session),
+            emitter=IntelligentSignalEmitter(),
             status=EngineStatus.IDLE,
             metadata={
                 "description": "Intelligent multi-strategy technical trading"
@@ -66,7 +66,7 @@ class CentralEngineManager:
         await self.register_engine(
             engine_id="micro_profit",
             engine_type=EngineType.MICRO_PROFIT,
-            emitter=MicroProfitSignalEmitter(self.db_session),
+            emitter=MicroProfitSignalEmitter(),
             status=EngineStatus.IDLE,
             metadata={
                 "description": "Micro profit generator"
@@ -182,104 +182,73 @@ class CentralEngineManager:
         print(f"🛑 Engine stopped: {engine_id}")
         return True
     
+    async def _run_engine_loop(
+        self,
+        engine_id: str,
+        runner: Callable[[], Awaitable[None]],
+        *,
+        sleep_seconds: float = float(os.getenv("ENGINE_LOOP_SLEEP", "1.0")),
+        error_sleep_seconds: float = float(os.getenv("ENGINE_ERROR_SLEEP", "5.0")),
+    ):
+        """Bucle genérico para ejecutar un motor de forma periódica."""
+        while engine_id in self.active_tasks:
+            try:
+                await runner()
+                self.engines[engine_id]["trades_generated"] += 1
+                self.engines[engine_id]["last_activity"] = datetime.now()
+                await asyncio.sleep(sleep_seconds)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.engines[engine_id]["errors"] += 1
+                print(f"❌ Error in engine {engine_id}: {e}")
+                await asyncio.sleep(error_sleep_seconds)
+
     async def _run_binance_mode_engine(self, engine_id: str):
         """Ejecutar engine de modo Binance"""
         from binance_mode_simulator import run_binance_mode_simulation
         
         mode = self.engines[engine_id]["metadata"]["mode"]
         
-        while engine_id in self.active_tasks:
-            try:
-                # Ejecutar un ciclo del simulador
-                await run_binance_mode_simulation(
-                    get_db, 
-                    self._create_notification_wrapper(), 
-                    mode
-                )
-                
-                # Actualizar estadísticas
-                self.engines[engine_id]["trades_generated"] += 1
-                self.engines[engine_id]["last_activity"] = datetime.now()
-                
-                # Pequeña pausa para no sobrecargar
-                await asyncio.sleep(1)
-                
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                self.engines[engine_id]["errors"] += 1
-                print(f"❌ Error in binance mode engine {engine_id}: {e}")
-                await asyncio.sleep(5)
+        await self._run_engine_loop(
+            engine_id,
+            lambda: run_binance_mode_simulation(
+                get_db,
+                self._create_notification_wrapper(),
+                mode,
+            ),
+        )
     
     async def _run_intelligent_engine(self, engine_id: str):
         """Ejecutar engine intelligent"""
         from intelligent_simulator import run_intelligent_simulation
         
-        while engine_id in self.active_tasks:
-            try:
-                await run_intelligent_simulation(
-                    get_db,
-                    websocket_connections=None,
-                    notify_clients=self._create_notification_wrapper()
-                )
-                
-                self.engines[engine_id]["trades_generated"] += 1
-                self.engines[engine_id]["last_activity"] = datetime.now()
-                
-                await asyncio.sleep(1)
-                
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                self.engines[engine_id]["errors"] += 1
-                print(f"❌ Error in intelligent engine {engine_id}: {e}")
-                await asyncio.sleep(5)
+        await self._run_engine_loop(
+            engine_id,
+            lambda: run_intelligent_simulation(
+                get_db,
+                websocket_connections=None,
+                notify_clients=self._create_notification_wrapper(),
+            ),
+        )
     
     async def _run_micro_profit_engine(self, engine_id: str):
         """Ejecutar engine micro profit"""
         from micro_profit_generator import run_micro_profit_generator
         
-        while engine_id in self.active_tasks:
-            try:
-                await run_micro_profit_generator(
-                    get_db,
-                    self._create_notification_wrapper()
-                )
-                
-                self.engines[engine_id]["trades_generated"] += 1
-                self.engines[engine_id]["last_activity"] = datetime.now()
-                
-                await asyncio.sleep(1)
-                
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                self.engines[engine_id]["errors"] += 1
-                print(f"❌ Error in micro profit engine {engine_id}: {e}")
-                await asyncio.sleep(5)
+        await self._run_engine_loop(
+            engine_id,
+            lambda: run_micro_profit_generator(get_db, self._create_notification_wrapper()),
+        )
     
     async def _run_simulation_engine(self, engine_id: str):
         """Ejecutar engine de simulación básica"""
         from simulator import run_periodic_simulation
         
-        while engine_id in self.active_tasks:
-            try:
-                await run_periodic_simulation(
-                    get_db,
-                    self._create_notification_wrapper()
-                )
-                
-                self.engines[engine_id]["trades_generated"] += 1
-                self.engines[engine_id]["last_activity"] = datetime.now()
-                
-                await asyncio.sleep(1)
-                
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                self.engines[engine_id]["errors"] += 1
-                print(f"❌ Error in simulation engine {engine_id}: {e}")
-                await asyncio.sleep(5)
+        await self._run_engine_loop(
+            engine_id,
+            lambda: run_periodic_simulation(get_db, self._create_notification_wrapper()),
+        )
     
     async def _run_execution_engine(self, engine_id: str):
         """Ejecutar engine de ejecución con costos realistas"""

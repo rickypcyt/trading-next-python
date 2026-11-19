@@ -9,10 +9,9 @@ import uuid
 class SignalEmitter:
     """Interfaz para que los motores emitan señales al Portfolio Manager"""
     
-    def __init__(self, engine_name: str, db_session):
+    def __init__(self, engine_name: str, db_session=None):
         self.engine_name = engine_name
-        self.db = db_session
-        self.portfolio = get_portfolio_manager(db_session)
+        self.portfolio = get_portfolio_manager()
     
     async def emit_trade_intent(self, 
                               symbol: str,
@@ -64,7 +63,7 @@ class SignalEmitter:
 class IntelligentSignalEmitter(SignalEmitter):
     """Emitter específico para Intelligent Trading Simulator"""
     
-    def __init__(self, db_session):
+    def __init__(self, db_session=None):
         super().__init__('intelligent', db_session)
 
 class BinanceModeSignalEmitter(SignalEmitter):
@@ -81,19 +80,19 @@ class BinanceModeSignalEmitter(SignalEmitter):
 class MicroProfitSignalEmitter(SignalEmitter):
     """Emitter específico para Micro Profit Generator"""
     
-    def __init__(self, db_session):
+    def __init__(self, db_session=None):
         super().__init__('micro_profit', db_session)
 
 class SimulationSignalEmitter(SignalEmitter):
     """Emitter específico para Trading Simulator básico"""
     
-    def __init__(self, db_session):
+    def __init__(self, db_session=None):
         super().__init__('simulation', db_session)
 
 class ExecutionSignalEmitter(SignalEmitter):
     """Emitter específico para Execution Engine con costos realistas"""
     
-    def __init__(self, db_session):
+    def __init__(self, db_session=None):
         super().__init__('execution', db_session)
     
     async def emit_realistic_trade(self, 
@@ -133,7 +132,7 @@ class ExecutionSignalEmitter(SignalEmitter):
 class TradingSignalEmitter(SignalEmitter):
     """Emitter específico para Trading Engine con análisis técnico"""
     
-    def __init__(self, db_session):
+    def __init__(self, db_session=None):
         super().__init__('trading', db_session)
     
     async def emit_technical_signal(self,

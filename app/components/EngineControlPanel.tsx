@@ -1,5 +1,6 @@
 'use client';
 
+import { API_BASE, apiUrl } from '@/lib/api';
 import React, { useState, useEffect, useCallback, type SetStateAction } from 'react';
 import {
   Settings, Play, Pause,
@@ -190,7 +191,7 @@ async function getEngineMetrics(engine: Engine): Promise<{
 }> {
   try {
     // Obtener métricas reales del backend
-    const response = await fetch(`http://127.0.0.1:5000/engines/${engine.type}/metrics`);
+    const response = await fetch(`${API_BASE}/engines/${engine.type}/metrics`);
     if (response.ok) {
       const metrics = await response.json();
       return {
@@ -433,7 +434,7 @@ const EngineControlPanel: React.FC<EngineControlPanelProps> = ({
 
   const fetchEngines = useCallback(async () => {
     try {
-      const res = await fetch('http://127.0.0.1:5000/engines');
+      const res = await fetch(apiUrl('/engines'));
       if (!res.ok) throw new Error();
       const data = await res.json();
       setEngines(data.engines ?? {});
@@ -456,7 +457,7 @@ const EngineControlPanel: React.FC<EngineControlPanelProps> = ({
     const isRunning = engine.status === 'running';
     const action = isRunning ? 'stop' : 'start';
     try {
-      const res = await fetch(`http://127.0.0.1:5000/engines/${engineId}/${action}`, { method: 'POST' });
+      const res = await fetch(`${API_BASE}/engines/${engineId}/${action}`, { method: 'POST' });
       if (!res.ok) throw new Error();
       
       setEngines(prev => {
@@ -483,7 +484,7 @@ const EngineControlPanel: React.FC<EngineControlPanelProps> = ({
     try {
       await Promise.all(
         targets.map(id =>
-          fetch(`http://127.0.0.1:5000/engines/${id}/${action}`, { method: 'POST' })
+          fetch(`${API_BASE}/engines/${id}/${action}`, { method: 'POST' })
         )
       );
       toast.success(`Engines ${action === 'start' ? 'iniciados' : 'detenidos'}`);

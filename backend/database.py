@@ -59,6 +59,14 @@ class Trade(Base):
     exit_reason = Column(String)    # Razón de salida
     status = Column(String)         # executed, rejected, failed
 
+    @property
+    def pnl_percentage(self) -> float:
+        """Porcentaje de P&L sobre el capital invertido."""
+        invested = self.investment_amount or (self.entry_price * self.size if self.entry_price and self.size else 0)
+        if not invested or not self.pnl:
+            return 0.0
+        return (self.pnl / invested) * 100
+
 class EquityCurve(Base):
     __tablename__ = "equity_curve"
     

@@ -77,7 +77,7 @@ async def generate_binance_mode_trade(mode: str, db: Session = Depends(get_db)):
     simulator = BinanceModeSimulator(db, mode)
     
     try:
-        trade = simulator.generate_mode_trade()
+        trade = await simulator.generate_mode_trade()
         
         if trade:
             db.add(trade)

@@ -1,5 +1,6 @@
 'use client'
 
+import { API_BASE, WS_URL, apiUrl } from '@/lib/api';
 import { useEffect, useState } from 'react'
 
 import { DollarSign } from 'lucide-react'
@@ -66,7 +67,7 @@ export default function ManualTradesLog() {
     fetchTradesStatus()
     
     // WebSocket para actualizaciones en tiempo real
-    const ws = new WebSocket('ws://127.0.0.1:5000/ws')
+    const ws = new WebSocket(WS_URL)
     
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data)
@@ -89,7 +90,7 @@ export default function ManualTradesLog() {
 
   const fetchTradesStatus = async () => {
     try {
-      const response = await fetch('http://127.0.0.1:5000/manual-trades/status')
+      const response = await fetch(apiUrl('/manual-trades/status'))
       const data = await response.json()
       if (data.status === 'success') {
         const statusMap: Record<number, TradeStatus> = {}
@@ -112,7 +113,7 @@ export default function ManualTradesLog() {
 
   const fetchManualTrades = async () => {
     try {
-      const response = await fetch('http://127.0.0.1:5000/manual-trades')
+      const response = await fetch(apiUrl('/manual-trades'))
       const data = await response.json()
       setTrades(data)
     } catch (error) {
@@ -126,7 +127,7 @@ export default function ManualTradesLog() {
     e.preventDefault()
     
     try {
-      const response = await fetch('http://127.0.0.1:5000/manual-trades', {
+      const response = await fetch(apiUrl('/manual-trades'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -159,7 +160,7 @@ export default function ManualTradesLog() {
 
   const closeTrade = async (tradeId: number, exitPrice: number) => {
     try {
-      const response = await fetch(`http://127.0.0.1:5000/manual-trades/${tradeId}/close`, {
+      const response = await fetch(`${API_BASE}/manual-trades/${tradeId}/close`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -181,7 +182,7 @@ export default function ManualTradesLog() {
     if (!confirm('Are you sure you want to delete this trade?')) return
     
     try {
-      const response = await fetch(`http://127.0.0.1:5000/manual-trades/${tradeId}`, {
+      const response = await fetch(`${API_BASE}/manual-trades/${tradeId}`, {
         method: 'DELETE'
       })
       

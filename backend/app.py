@@ -25,6 +25,7 @@ from trade_logger import get_trade_logger
 from portfolio_manager import get_portfolio_manager
 from engine_manager import engine_manager
 from engine_endpoints import register_engine_endpoints
+from strategy_api import register_strategy_endpoints
 from price_monitor import price_monitor
 
 app = FastAPI()
@@ -40,6 +41,9 @@ app.add_middleware(
 
 # Registrar endpoints de engines
 register_engine_endpoints(app)
+
+# Registrar endpoints del motor de decisión unificado
+register_strategy_endpoints(app)
 
 # WebSocket connections
 websocket_connections = set()
@@ -88,7 +92,14 @@ async def websocket_endpoint(websocket: WebSocket):
 
     try:
         while True:
-            await websocket.receive_text()  # Keep connection alive
+            data = await websocket.receive_text()
+            # Handle ping/pong for keepalive
+            try:
+                msg = json.loads(data)
+                if msg.get("type") == "ping":
+                    await websocket.send_text(json.dumps({"type": "pong"}))
+            except:
+                pass  # Ignore non-JSON or malformed messages
     except WebSocketDisconnect:
         pass
     except Exception as e:
@@ -231,7 +242,7 @@ async def generate_binance_trade(db: Session = Depends(get_db)):
     simulator = BinanceDataSimulator(db)
     
     try:
-        trade = simulator.generate_realistic_trade()
+        trade = await simulator.generate_realistic_trade()
         
         if trade:
             db.add(trade)
@@ -606,7 +617,7 @@ async def generate_intelligent_trade(db: Session = Depends(get_db)):
     simulator = AdvancedTradingSimulator(db)
     
     try:
-        trade = simulator.generate_intelligent_trade()
+        trade = await simulator.generate_intelligent_trade()
         
         if trade:
             db.add(trade)
@@ -1365,7 +1376,7 @@ async def generate_binance_mode_trade(mode: str, db: Session = Depends(get_db)):
     simulator = BinanceModeSimulator(db, mode)
     
     try:
-        trade = simulator.generate_mode_trade()
+        trade = await simulator.generate_mode_trade()
         
         if trade:
             db.add(trade)

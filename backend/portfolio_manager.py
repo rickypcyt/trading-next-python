@@ -4,10 +4,22 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set
 from dataclasses import dataclass, field
 from enum import Enum
+from contextlib import contextmanager
 from sqlalchemy.orm import Session
-from database import Trade, EquityCurve, Metric, Alert
+from database import Trade, EquityCurve, Metric, Alert, SessionLocal
 from execution_engine import execution_engine, TradeRequest, TradeDirection
+from dynamic_sizer import dynamic_sizer
 import json
+
+
+@contextmanager
+def _db_session():
+    """Crear y cerrar una sesión de BD por operación."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 class SignalType(Enum):
     TRADE_INTENT = "trade_intent"
@@ -89,8 +101,7 @@ class RiskMetrics:
 class PortfolioManager:
     """Gestor central de portfolio y riesgo"""
     
-    def __init__(self, db: Session, initial_capital: float = 100.0):
-        self.db = db
+    def __init__(self, initial_capital: float = 100.0):
         self.state = PortfolioState(total_capital=initial_capital, available_capital=initial_capital)
         self.risk_metrics = RiskMetrics()
         self.pending_signals: List[TradeIntent] = []
@@ -119,7 +130,8 @@ class PortfolioManager:
     def _initialize_from_database(self):
         """Inicializar estado desde trades existentes"""
         try:
-            trades = self.db.query(Trade).order_by(Trade.timestamp_entry.asc()).all()
+            with _db_session() as db:
+                trades = db.query(Trade).order_by(Trade.timestamp_entry.asc()).all()
             
             if not trades:
                 return
@@ -387,11 +399,15 @@ class PortfolioManager:
             # Convertir a TradeRequest
             trade_request = intent.to_trade_request()
             
+            # Usar capital dinámico asignado por performance del engine
+            engine_capital = dynamic_sizer.get_capital_for_engine(intent.source_engine)
+            engine_risk = dynamic_sizer.get_risk_per_trade_for_engine(intent.source_engine)
+            
             # Ejecutar con Execution Engine
             trade_result = execution_engine.execute_trade(
                 trade_request,
-                self.state.total_capital,
-                risk_per_trade=0.02
+                engine_capital,
+                risk_per_trade=engine_risk
             )
             
             # Simular salida (aquí iría lógica real de salida)
@@ -463,15 +479,17 @@ class PortfolioManager:
             )
             
             # Guardar en base de datos
-            self.db.add(db_trade)
-            self.db.commit()
-            self.db.refresh(db_trade)
+            with _db_session() as db:
+                db.add(db_trade)
+                db.commit()
+                db.refresh(db_trade)
             
             return db_trade
             
         except Exception as e:
             print(f"❌ Error executing approved intent: {e}")
-            self.db.rollback()
+            with _db_session() as db:
+                db.rollback()
             return None
     
     async def _update_portfolio_state(self, trade: Trade):
@@ -497,9 +515,13 @@ class PortfolioManager:
             timestamp=datetime.now().isoformat(),
             capital=round(self.state.total_capital, 2)
         )
-        self.db.merge(equity)
-        self.db.commit()
-        
+        with _db_session() as db:
+            db.merge(equity)
+            db.commit()
+            # Refrescar allocation dinámica
+            dynamic_sizer.force_refresh()
+            dynamic_sizer.refresh_from_db(db)
+
         print(f"💰 Portfolio updated: ${self.state.total_capital:.2f} capital, P&L: ${trade.pnl:+.2f}")
     
     async def _log_signal(self, intent: TradeIntent, status: SignalStatus, reason: str):
@@ -564,9 +586,9 @@ class PortfolioManager:
 # Instancia global del Portfolio Manager
 portfolio_manager = None
 
-def get_portfolio_manager(db: Session) -> PortfolioManager:
-    """Obtener instancia del Portfolio Manager"""
+def get_portfolio_manager(db: Session = None) -> PortfolioManager:
+    """Obtener instancia del Portfolio Manager. El parámetro db se conserva solo por compatibilidad."""
     global portfolio_manager
     if portfolio_manager is None:
-        portfolio_manager = PortfolioManager(db)
+        portfolio_manager = PortfolioManager()
     return portfolio_manager

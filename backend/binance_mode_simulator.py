@@ -93,7 +93,7 @@ class BinanceModeSimulator(BinanceDataSimulator):
         position_size = self.calculate_position_size()
         
         # Obtener precio real de Binance
-        market_data = self.get_real_price_data('BTCUSDT')
+        market_data = await self.get_real_price_data('BTCUSDT')
         
         if market_data:
             base_price = market_data['current_price']
@@ -145,7 +145,7 @@ class BinanceModeSimulator(BinanceDataSimulator):
             print(f"❌ [{self.mode.name}] No market data available")
             return None
     
-    def generate_mode_trade(self):
+    async def generate_mode_trade(self):
         """Generar trade según el modo seleccionado (método original para compatibilidad)"""
         can_trade, reason = self.should_trade()
         
@@ -158,7 +158,7 @@ class BinanceModeSimulator(BinanceDataSimulator):
         potential_profit = potential_loss * self.mode.reward_risk_ratio
         
         # Obtener precio real de Binance PRIMERO
-        market_data = self.get_real_price_data('BTCUSDT')
+        market_data = await self.get_real_price_data('BTCUSDT')
         
         if market_data:
             base_price = market_data['current_price']
@@ -277,7 +277,7 @@ async def run_binance_mode_simulation(get_db_func, notification_callback, mode="
         
         try:
             # Generar trade según modo
-            trade = simulator.generate_mode_trade()
+            trade = await simulator.generate_mode_trade()
             
             if trade:
                 db.add(trade)

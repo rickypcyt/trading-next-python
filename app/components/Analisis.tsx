@@ -3,7 +3,7 @@
 import { Activity, BarChart3, Calculator, DollarSign, PieChart as PieChartIcon, TrendingUp } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
-import { Trade } from '../page';
+import { Trade } from '../types';
 import { useMemo } from 'react';
 
 interface AnalisisProps {

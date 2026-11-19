@@ -4,7 +4,7 @@ import { Copy, Download, GripVertical, RotateCcw, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 // Importar tipos desde page.tsx
-import type { Trade } from '../page';
+import type { Trade } from '../types';
 
 interface ColumnConfig {
   key: keyof Trade | 'custom_opened' | 'custom_closed' | 'custom_duration' | 'copy';

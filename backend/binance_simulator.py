@@ -10,9 +10,10 @@ from database import Trade, EquityCurve, Metric, Alert
 from execution_engine import execution_engine, TradeRequest, TradeDirection
 from technical_analyzer import TechnicalAnalyzer
 from data_cache import binance_cache
-from advanced_strategies import AdvancedStrategyEngine, StrategyType, OrderSide
+from advanced_strategies import AdvancedStrategyEngine, StrategyType, OrderSide, RiskLevel
 
-from risk_settings import ACCOUNT_CAPITAL
+from risk_settings import ACCOUNT_CAPITAL, RISK_LEVEL, LEVERAGE
+from dynamic_sizer import dynamic_sizer
 
 class BinanceDataSimulator(TradingSimulator):
     def __init__(self, db: Session):
@@ -30,7 +31,7 @@ class BinanceDataSimulator(TradingSimulator):
             print(f"Error initializing Binance client: {e}")
             return False
     
-    def get_real_price_data(self, symbol: str):
+    async def get_real_price_data(self, symbol: str):
         """Obtener datos de precio reales de Binance con caché"""
         # Intentar obtener del caché primero
         cached_data = binance_cache.get(symbol, 'ticker')
@@ -42,8 +43,8 @@ class BinanceDataSimulator(TradingSimulator):
             self.initialize_binance()
         
         try:
-            # Obtener precio actual
-            ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
+            # Obtener precio actual sin bloquear el event loop
+            ticker = await asyncio.to_thread(self.binance_client.get_symbol_ticker, symbol=symbol)
             current_price = float(ticker['price'])
             
             # Intentar obtener velas del caché
@@ -54,13 +55,15 @@ class BinanceDataSimulator(TradingSimulator):
                 print(f"🎯 Cache HIT para velas {symbol}")
             else:
                 # Obtener datos de velas de 24h para volatilidad
-                klines = self.binance_client.get_klines(
-                    symbol=symbol, 
+                klines = await asyncio.to_thread(
+                    self.binance_client.get_klines,
+                    symbol=symbol,
                     interval=Client.KLINE_INTERVAL_1HOUR,
                     limit=24
                 )
-                # Guardar en caché por 2 minutos
-                binance_cache.set_klines(symbol, klines, '1h', 24, ttl=120)
+                # Guardar en caché por un tiempo configurable (default 2 minutos)
+                klines_ttl = int(os.getenv("BINANCE_KLINES_TTL", "120"))
+                binance_cache.set_klines(symbol, klines, '1h', 24, ttl=klines_ttl)
                 print(f"🔄 Cache MISS para velas {symbol} - Guardando en caché")
             
             # Calcular volatilidad basada en las últimas 24 horas
@@ -82,8 +85,9 @@ class BinanceDataSimulator(TradingSimulator):
                 'technical_analysis': technical_analysis
             }
             
-            # Guardar en caché por 90 segundos
-            binance_cache.set(symbol, market_data, 'ticker', ttl=90)
+            # Guardar en caché por un tiempo configurable (default 90s)
+            ticker_ttl = int(os.getenv("BINANCE_TICKER_TTL", "90"))
+            binance_cache.set(symbol, market_data, 'ticker', ttl=ticker_ttl)
             print(f"🔄 Cache MISS para {symbol} - Guardando en caché")
             
             return market_data
@@ -92,13 +96,13 @@ class BinanceDataSimulator(TradingSimulator):
             print(f"Error getting Binance data for {symbol}: {e}")
             return None
     
-    def generate_realistic_trade(self):
+    async def generate_realistic_trade(self):
         """Genera un trade basado en estrategias avanzadas de trading profesional"""
         # Seleccionar símbolo aleatorio
         symbol = self.symbols[random.randint(0, len(self.symbols) - 1)]
         
         # Obtener datos reales de Binance
-        market_data = self.get_real_price_data(symbol)
+        market_data = await self.get_real_price_data(symbol)
         
         if not market_data:
             # Fallback a simulación si Binance falla
@@ -108,12 +112,16 @@ class BinanceDataSimulator(TradingSimulator):
         volatility = market_data['volatility']
         technical_analysis = market_data['technical_analysis']
         
-        # Inicializar motor de estrategias avanzadas
+        # Usar capital dinámico asignado por performance del engine
+        engine_capital = dynamic_sizer.get_capital_for_engine("binance_advanced")
+        risk_level = RiskLevel[RISK_LEVEL] if RISK_LEVEL in RiskLevel.__members__ else RiskLevel.MODERATE
         strategy_engine = AdvancedStrategyEngine(
             symbol,
             current_price,
             volatility,
-            capital=ACCOUNT_CAPITAL,
+            capital=engine_capital,
+            risk_level=risk_level,
+            leverage=LEVERAGE,
         )
         
         # Actualizar motor con historial de precios
@@ -182,11 +190,13 @@ class BinanceDataSimulator(TradingSimulator):
             volatility=volatility * 100
         )
         
-        # Ejecutar trade con Execution Engine
+        # Ejecutar trade con Execution Engine usando capital dinámico
+        engine_capital = dynamic_sizer.get_capital_for_engine("binance_advanced")
+        engine_risk = dynamic_sizer.get_risk_per_trade_for_engine("binance_advanced")
         trade_result = execution_engine.execute_trade(
             trade_request,
-            self.current_capital,
-            risk_per_trade=0.02
+            engine_capital,
+            risk_per_trade=engine_risk
         )
         
         # Simular resultado basado en la estrategia
@@ -324,7 +334,7 @@ async def run_real_time_simulation(db_factory, notify_clients):
             simulator = BinanceDataSimulator(db)
             
             # Generar trade con datos reales
-            trade = simulator.generate_realistic_trade()
+            trade = await simulator.generate_realistic_trade()
             
             if trade:
                 db.add(trade)
@@ -337,9 +347,13 @@ async def run_real_time_simulation(db_factory, notify_clients):
                 
                 # Actualizar equity
                 equity = simulator.update_equity()
-                db.add(equity)
+                db.merge(equity)
                 db.commit()
                 db.refresh(equity)
+
+                # Refrescar allocation dinámica después de cada trade
+                dynamic_sizer.force_refresh()
+                dynamic_sizer.refresh_from_db(db)
                 
                 # Calcular métricas
                 metrics = simulator.calculate_metrics()
@@ -391,7 +405,13 @@ async def run_real_time_simulation(db_factory, notify_clients):
                         "source": "binance_real_time"
                     }
                 })
-                
+
+                # Notificar allocation actualizada
+                await notify_clients({
+                    "type": "capital_allocation_updated",
+                    "data": dynamic_sizer.get_allocation_summary()
+                })
+
                 performance_metrics['success_count'] += 1
             
             db.close()

@@ -1,131 +1,23 @@
 'use client';
 
+import { API_BASE, WS_URL, apiUrl } from '@/lib/api';
 import { Activity, AlertTriangle, ArrowDown, ArrowUp, Bell, DollarSign, ExternalLink, TrendingDown, TrendingUp } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import Analisis from './components/Analisis';
 import EngineControlPanel from './components/EngineControlPanel';
+import DecisionPanel from './components/DecisionPanel';
+import CapitalAllocation from './components/CapitalAllocation';
 import ManualTradesLog from './components/ManualTradesLog';
+import TradesGenerationPanel from './components/TradesGenerationPanel';
 import TradesTable from './components/TradesTable';
 import TradingViewWidget from './components/TradingViewWidget';
+import { useDashboardData } from './hooks/useDashboardData';
+import { useWebSocket } from './hooks/useWebSocket';
 import { toast } from 'react-toastify';
 
-export interface Trade {
-  id: number;
-  timestamp_entry: string;
-  timestamp_exit: string;
-  symbol: string;
-  strategy: string;
-  source_engine: string;
-  source_mode?: string;
-  direction: 'long' | 'short';
-  entry_price: number;
-  exit_price: number;
-  requested_entry_price: number;
-  requested_exit_price: number;
-  size: number;
-  investment_amount?: number;
-  pnl: number;
-  gross_pnl: number;
-  pnl_percentage: number;
-  total_costs: number;
-  entry_fees: number;
-  exit_fees: number;
-  slippage_cost: number;
-  spread_cost: number;
-  cost_impact_pct: number;
-  duration_formatted: string;
-  confidence: number;
-  volatility: number;
-}
-
-interface TradeEventPayload {
-  id?: number | string;
-  trade_id?: number | string;
-  timestamp_entry?: string;
-  entry_time?: string;
-  timestamp_exit?: string;
-  exit_time?: string;
-  symbol?: string;
-  ticker?: string;
-  strategy?: string;
-  source_strategy?: string;
-  source_engine?: string;
-  source?: string;
-  source_mode?: string;
-  direction?: string;
-  side?: string;
-  entry_price?: number | string;
-  price?: number | string;
-  entry?: number | string;
-  exit_price?: number | string;
-  exit?: number | string;
-  target_price?: number | string;
-  size?: number | string;
-  quantity?: number | string;
-  position_size?: number | string;
-  investment_amount?: number | string;
-  pnl?: number | string;
-  net_pnl?: number | string;
-  gross_pnl?: number | string;
-  total_costs?: number | string;
-  costs?: number | string;
-  entry_fees?: number | string;
-  exit_fees?: number | string;
-  slippage_cost?: number | string;
-  spread_cost?: number | string;
-  requested_entry_price?: number | string;
-  requested_exit_price?: number | string;
-  confidence?: number | string;
-  volatility?: number | string;
-  duration_ms?: number | string;
-  duration_formatted?: string;
-  [key: string]: unknown;
-}
-
-interface Engine {
-  type: string;
-  status: 'idle' | 'running' | 'error';
-  last_activity: string | null;
-  trades_generated: number;
-  errors: number;
-  metadata: Record<string, unknown>;
-}
-
-interface Metric {
-  id: number;
-  timestamp: string;
-  win_rate: number;
-  sharpe: number;
-  max_drawdown: number;
-  profit_factor: number;
-}
-
-interface Alert {
-  id: number;
-  timestamp: string;
-  type: string;
-  message: string;
-}
-
-interface EquityPoint {
-  timestamp: string;
-  capital: number;
-}
-
-interface TradingMode {
-  name: string;
-  risk_percentage: number;
-  win_rate: number;
-  reward_risk_ratio: number;
-  max_consecutive_losses: number;
-  trades_per_hour: number;
-}
-
-interface BinanceModeStatusMap {
-  [mode: string]: 'running' | 'stopped';
-}
+import type { Alert, BinanceModeStatusMap, Engine, EquityPoint, Metric, Trade, TradeEventPayload, TradingMode } from './types';
 
 // Funciones para manejar localStorage
 const getStoredStatus = (key: string, defaultValue: string) => {
@@ -181,424 +73,209 @@ function getTimeAgo(date: Date): string {
 }
 
 export default function TradingDashboard() {
-  const [allTrades, setAllTrades] = useState<Trade[]>([]);
-  const [engines, setEngines] = useState<Record<string, Engine>>({});
-  const [metrics, setMetrics] = useState<Metric | null>(null);
-  const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [wsStatus, setWsStatus] = useState<string>('disconnected');
+  const {
+    allTrades,
+    trades,
+    engines,
+    metrics,
+    alerts,
+    tradingModes,
+    hasMoreTrades,
+    isRefreshing,
+    isDeletingTrades,
+    fetchAllData,
+    addTradeFromEvent,
+    removeTradeById,
+    clearTradesState,
+    showMoreTrades,
+    showAllTrades,
+    deleteAllTrades,
+    setEngines,
+  } = useDashboardData();
+
+  const { status: wsStatus, lastMessage } = useWebSocket(WS_URL);
+
   const [selectedIntelligentStrategies, setSelectedIntelligentStrategies] = useState<string[]>([
     'MACD_Signal', 'MA_Cross', 'RSI_Divergence', 'Bollinger_Bands', 'Volume_Breakout', 'Support_Resistance'
   ]);
-  const [tradingModes, setTradingModes] = useState<Record<string, TradingMode>>({});
+  const [selectedModes, setSelectedModes] = useState<string[]>([]);
   const [binanceModeStatus, setBinanceModeStatus] = useState<BinanceModeStatusMap>(() => {
-    // Always start with consistent initial state to avoid hydration mismatch
     const stored: BinanceModeStatusMap = {};
-    const modes = ['conservative', 'hybrid', 'aggressive'];
-    modes.forEach(mode => {
+    ['conservative', 'hybrid', 'aggressive'].forEach(mode => {
       stored[mode] = 'stopped';
     });
     return stored;
   });
-  const [selectedModes, setSelectedModes] = useState<string[]>([]);
-  const [displayLimit, setDisplayLimit] = useState<number>(50);
-  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
-  const [trades, setTrades] = useState<Trade[]>([]);
-  const [hasMoreTrades, setHasMoreTrades] = useState<boolean>(false);
-  const [isDeletingTrades, setIsDeletingTrades] = useState<boolean>(false);
 
-  const formatDurationFromMs = useCallback((durationMs: number) => {
-    if (!durationMs || durationMs <= 0) return '0s';
-    const totalSeconds = Math.floor(durationMs / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
-  }, []);
-
-  const normalizeTradeFromEvent = useCallback((payload: TradeEventPayload): Trade => {
-    const id = Number(payload.id ?? payload.trade_id ?? Date.now());
-    const timestampEntry = payload.timestamp_entry ?? payload.entry_time ?? new Date().toISOString();
-    const timestampExit = payload.timestamp_exit ?? payload.exit_time ?? '';
-    const toNumber = (value: number | string | undefined): number =>
-      value === undefined ? 0 : Number(value) || 0;
-
-    const entryPrice = toNumber(payload.entry_price ?? payload.price ?? payload.entry);
-    const exitPrice = toNumber(payload.exit_price ?? payload.exit ?? payload.target_price);
-    const size = toNumber(payload.size ?? payload.quantity ?? payload.position_size);
-    const investment = toNumber(payload.investment_amount) || (entryPrice && size ? entryPrice * size : 0);
-    const pnl = toNumber(payload.pnl ?? payload.net_pnl);
-    const grossPnl = toNumber(payload.gross_pnl ?? pnl);
-    const totalCosts = toNumber(payload.total_costs ?? payload.costs);
-    const entryFees = toNumber(payload.entry_fees);
-    const exitFees = toNumber(payload.exit_fees);
-    const slippageCost = toNumber(payload.slippage_cost);
-    const spreadCost = toNumber(payload.spread_cost);
-    const requestedEntryPrice = toNumber(payload.requested_entry_price ?? entryPrice);
-    const requestedExitPrice = toNumber(payload.requested_exit_price ?? exitPrice);
-    const volatility = toNumber(payload.volatility);
-    const confidence = toNumber(payload.confidence);
-    const durationMs = toNumber(payload.duration_ms);
-
-    const directionRaw = (payload.direction ?? payload.side ?? 'long').toString().toLowerCase();
-    const direction: 'long' | 'short' = directionRaw === 'short' ? 'short' : 'long';
-
-    const notional = investment || (entryPrice * size);
-    const pnlPercentage = notional ? (pnl / notional) * 100 : 0;
-    const costImpactPct = notional ? (totalCosts / notional) * 100 : 0;
-
-    return {
-      id,
-      timestamp_entry: timestampEntry,
-      timestamp_exit: timestampExit,
-      symbol: payload.symbol ?? payload.ticker ?? 'UNKNOWN',
-      strategy: payload.strategy ?? payload.source_strategy ?? 'unknown',
-      source_engine: payload.source_engine ?? payload.source ?? 'unknown',
-      source_mode: payload.source_mode ?? '',
-      direction,
-      entry_price: entryPrice,
-      exit_price: exitPrice,
-      requested_entry_price: requestedEntryPrice,
-      requested_exit_price: requestedExitPrice,
-      size,
-      investment_amount: investment,
-      pnl,
-      gross_pnl: grossPnl,
-      pnl_percentage: pnlPercentage,
-      total_costs: totalCosts,
-      entry_fees: entryFees,
-      exit_fees: exitFees,
-      slippage_cost: slippageCost,
-      spread_cost: spreadCost,
-      cost_impact_pct: costImpactPct,
-      duration_formatted: payload.duration_formatted ?? formatDurationFromMs(durationMs),
-      confidence,
-      volatility,
-    } as Trade;
-  }, [formatDurationFromMs]);
-
-  const addTradeFromEvent = useCallback((payload: TradeEventPayload) => {
-    const trade = normalizeTradeFromEvent(payload);
-    setAllTrades(prevAll => {
-      const deduped = prevAll.filter(existing => existing.id !== trade.id);
-      const updatedAll = [trade, ...deduped].sort((a, b) => new Date(b.timestamp_entry).getTime() - new Date(a.timestamp_entry).getTime());
-      setTrades(updatedAll.slice(0, displayLimit));
-      setHasMoreTrades(updatedAll.length > displayLimit);
-      return updatedAll;
-    });
-  }, [displayLimit, normalizeTradeFromEvent]);
-
-  const removeTradeById = useCallback((tradeId: number) => {
-    setAllTrades(prev => {
-      const updated = prev.filter(trade => trade.id !== tradeId);
-      setTrades(updated.slice(0, displayLimit));
-      setHasMoreTrades(updated.length > displayLimit);
-      return updated;
-    });
-  }, [displayLimit]);
-
-  const clearTradesState = useCallback(() => {
-    setAllTrades([]);
-    setTrades([]);
-    setHasMoreTrades(false);
-  }, []);
-
-  // Restore stored values after mount to avoid hydration mismatch
-  useEffect(() => {
-    // Only run on client side and only once on mount
-    if (typeof window !== 'undefined') {
-      // Restore selected modes from localStorage
-      const storedModes = getStoredStatus('selected_binance_modes', '');
-      const modesArray = storedModes ? storedModes.split(',') : [];
-      setSelectedModes(modesArray);
-
-      // Restore intelligent strategies from localStorage
-      const storedStrategies = getStoredStatus('selected_intelligent_strategies', '');
-      const strategiesArray = storedStrategies ? storedStrategies.split(',') : [
-        'MACD_Signal', 'MA_Cross', 'RSI_Divergence', 'Bollinger_Bands', 'Volume_Breakout', 'Support_Resistance'
-      ];
-      setSelectedIntelligentStrategies(strategiesArray);
-
-      // Restore mode statuses
-    }
-  }, []);
-
-  const fetchAllData = useCallback(async () => {
-    if (!isRefreshing) {
-      setIsRefreshing(true);
-    }
-    try {
-      const [tradesRes, metricsRes, alertsRes, modesRes, enginesRes] = await Promise.all([
-        fetch('http://127.0.0.1:5000/trades'),
-        fetch('http://127.0.0.1:5000/metrics'),
-        fetch('http://127.0.0.1:5000/alerts'),
-        fetch('http://127.0.0.1:5000/binance/modes').catch(() => null), // Puede no existir aún
-        fetch('http://127.0.0.1:5000/engines')
-      ]);
-
-      const [tradesData, metricsData, alertsData, modesData, enginesData] = await Promise.all([
-        tradesRes.json(),
-        metricsRes.json(),
-        alertsRes.json(),
-        modesRes?.json().catch(() => ({ modes: {} })), // Default si no existe
-        enginesRes.json()
-      ]);
-
-      // Guardar todos los trades
-      const processedTrades = tradesData.map((trade: Trade) => ({
-        ...trade,
-        investment_amount: trade.investment_amount || (trade.size * trade.entry_price)
-      }));
-      setAllTrades(processedTrades);
-      
-      // Update display trades
-      const displayTrades = processedTrades.slice(0, displayLimit);
-      setTrades(displayTrades);
-      setHasMoreTrades(processedTrades.length > displayLimit);
-      
-      // Actualizar engines
-      setEngines(enginesData.engines ?? {});
-      
-      setMetrics(metricsData[0] || null);
-      setAlerts(alertsData);
-      setTradingModes(modesData.modes || {});
-    } catch (error) {
-      console.error('Error fetching data:', error);
-      toast.error('Error loading dashboard data', { toastId: 'fetch-error' });
-    } finally {
-      setIsRefreshing(false);
-    }
-  }, [displayLimit, isRefreshing]);
-
-  // Update selected strategies when they change
-  useEffect(() => {
-    if (selectedIntelligentStrategies.length > 0) {
-      // Save to localStorage
-      setStoredStatus('selected_intelligent_strategies', selectedIntelligentStrategies.join(','));
-      
-      // Send selected strategies to backend
-      fetch('http://127.0.0.1:5000/intelligent/strategies', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          strategies: selectedIntelligentStrategies
-        })
-      }).catch(error => {
-        console.error('Error updating strategies:', error);
-      });
-    }
-  }, [selectedIntelligentStrategies]);
-
+  // Refs para handlers accesibles desde el efecto WebSocket sin re-crear conexión
   const addTradeFromEventRef = useRef(addTradeFromEvent);
   const clearTradesStateRef = useRef(clearTradesState);
   const removeTradeByIdRef = useRef(removeTradeById);
   const fetchAllDataRef = useRef(fetchAllData);
 
+  useEffect(() => { addTradeFromEventRef.current = addTradeFromEvent; }, [addTradeFromEvent]);
+  useEffect(() => { clearTradesStateRef.current = clearTradesState; }, [clearTradesState]);
+  useEffect(() => { removeTradeByIdRef.current = removeTradeById; }, [removeTradeById]);
+  useEffect(() => { fetchAllDataRef.current = fetchAllData; }, [fetchAllData]);
+
+  // Restore stored values after mount to avoid hydration mismatch
   useEffect(() => {
-    addTradeFromEventRef.current = addTradeFromEvent;
-  }, [addTradeFromEvent]);
+    if (typeof window !== 'undefined') {
+      const storedModes = getStoredStatus('selected_binance_modes', '');
+      setSelectedModes(storedModes ? storedModes.split(',') : []);
 
-  useEffect(() => {
-    clearTradesStateRef.current = clearTradesState;
-  }, [clearTradesState]);
-
-  useEffect(() => {
-    removeTradeByIdRef.current = removeTradeById;
-  }, [removeTradeById]);
-
-  useEffect(() => {
-    fetchAllDataRef.current = fetchAllData;
-  }, [fetchAllData]);
-
-  useEffect(() => {
-    fetchAllDataRef.current?.();
-
-    let ws: WebSocket | null = null;
-    let reconnectAttempts = 0;
-    const maxReconnectAttempts = 5;
-    let reconnectTimeout: NodeJS.Timeout | null = null;
-
-    const connectWebSocket = () => {
-      try {
-        ws = new WebSocket('ws://127.0.0.1:5000/ws');
-
-        ws.onopen = () => {
-          setWsStatus('connected');
-          reconnectAttempts = 0;
-          toast.success('WebSocket connected', { autoClose: 2000, toastId: 'ws-connected' });
-        };
-
-        ws.onmessage = (event) => {
-          const data = JSON.parse(event.data);
-
-          switch (data.type) {
-            case 'binance_simulation_started':
-              setStoredStatus('binance', 'running');
-              toast.success('💎 Binance real-time simulation started', { toastId: 'binance-started' });
-              setEngines(prev => ({
-                ...prev,
-                binance: { ...prev.binance, status: 'running' }
-              }));
-              break;
-
-            case 'binance_simulation_stopped':
-              setStoredStatus('binance', 'stopped');
-              toast.error('⏹️ Binance simulation stopped', { toastId: 'binance-stopped' });
-              setEngines(prev => ({
-                ...prev,
-                binance: { ...prev.binance, status: 'idle' }
-              }));
-              break;
-
-            case 'intelligent_simulation_started':
-              setStoredStatus('intelligent', 'running');
-              toast.success('🧠 Intelligent simulation with technical analysis started', { toastId: 'intelligent-started' });
-              setEngines(prev => ({
-                ...prev,
-                intelligent: { ...prev.intelligent, status: 'running' }
-              }));
-              break;
-
-            case 'intelligent_simulation_stopped':
-              setStoredStatus('intelligent', 'stopped');
-              toast.error('⏹️ Intelligent simulation stopped', { toastId: 'intelligent-stopped' });
-              setEngines(prev => ({
-                ...prev,
-                intelligent: { ...prev.intelligent, status: 'idle' }
-              }));
-              break;
-
-            case 'binance_mode_started':
-              if (data.data?.mode) {
-                const mode = data.data.mode;
-                setSelectedModes(prev => {
-                  const updated = [...prev.filter(m => m !== mode), mode];
-                  setStoredStatus('selected_binance_modes', updated.join(','));
-                  return updated;
-                });
-                setEngines(prev => ({
-                  ...prev,
-                  [`binance_${mode}`]: {
-                    ...prev[`binance_${mode}`],
-                    status: 'running',
-                    type: 'binance_mode',
-                    trades_generated: 0,
-                    errors: 0,
-                    last_activity: new Date().toISOString(),
-                    metadata: { mode }
-                  }
-                }));
-              }
-              break;
-
-            case 'binance_mode_stopped':
-              if (data.data?.mode) {
-                const mode = data.data.mode;
-                setSelectedModes(prev => {
-                  const updated = prev.filter(m => m !== mode);
-                  setStoredStatus('selected_binance_modes', updated.join(','));
-                  return updated;
-                });
-                setEngines(prev => ({
-                  ...prev,
-                  [`binance_${mode}`]: {
-                    ...prev[`binance_${mode}`],
-                    status: 'idle'
-                  }
-                }));
-              }
-              break;
-
-            case 'engine_started':
-              if (data.data?.engine_id) {
-                setEngines(prev => ({
-                  ...prev,
-                  [data.data.engine_id]: {
-                    ...prev[data.data.engine_id],
-                    status: 'running',
-                    last_activity: new Date().toISOString()
-                  }
-                }));
-              }
-              break;
-
-            case 'engine_stopped':
-              if (data.data?.engine_id) {
-                setEngines(prev => ({
-                  ...prev,
-                  [data.data.engine_id]: {
-                    ...prev[data.data.engine_id],
-                    status: 'idle',
-                    last_activity: new Date().toISOString()
-                  }
-                }));
-              }
-              break;
-
-            case 'binance_mode_trade_generated':
-              if (data.data) {
-                const pnlValue = Number(data.data.pnl ?? 0);
-                const sign = pnlValue >= 0 ? '+' : '-';
-                toast.info(`📊 Binance ${data.data.mode} trade: ${sign}$${Math.abs(pnlValue).toFixed(2)}`, {
-                  toastId: `binance-${data.data.mode}-trade-${data.data.trade_id}`,
-                });
-                addTradeFromEventRef.current?.(data.data);
-              }
-              break;
-
-            case 'trade_added':
-            case 'real_trade_generated':
-            case 'monthly_target_trade_generated':
-            case 'intelligent_trade_generated':
-              if (data.data) addTradeFromEventRef.current?.(data.data);
-              break;
-
-            case 'equity_updated':
-            case 'metrics_updated':
-            case 'alert_added':
-              fetchAllDataRef.current?.();
-              break;
-
-            case 'trade_deleted':
-              if (data.data?.trade_id !== undefined) {
-                removeTradeByIdRef.current?.(Number(data.data.trade_id));
-              }
-              break;
-
-            case 'trades_cleared':
-              clearTradesStateRef.current?.();
-              break;
-          }
-        };
-
-        ws.onclose = () => {
-          setWsStatus('disconnected');
-          toast.error('WebSocket disconnected', { toastId: 'ws-disconnected' });
-
-          if (reconnectAttempts < maxReconnectAttempts) {
-            reconnectAttempts += 1;
-            const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 5000);
-            reconnectTimeout = setTimeout(connectWebSocket, delay);
-          }
-        };
-
-        ws.onerror = (error) => {
-          console.warn('WebSocket connection error - will retry:', error);
-          setWsStatus('error');
-        };
-      } catch (error) {
-        console.error('Failed to create WebSocket connection:', error);
-        setWsStatus('error');
-      }
-    };
-
-    connectWebSocket();
-
-    return () => {
-      if (reconnectTimeout) clearTimeout(reconnectTimeout);
-      if (ws) ws.close();
-    };
+      const storedStrategies = getStoredStatus('selected_intelligent_strategies', '');
+      setSelectedIntelligentStrategies(
+        storedStrategies ? storedStrategies.split(',') : [
+          'MACD_Signal', 'MA_Cross', 'RSI_Divergence', 'Bollinger_Bands', 'Volume_Breakout', 'Support_Resistance'
+        ]
+      );
+    }
   }, []);
+
+  // Update selected strategies when they change
+  useEffect(() => {
+    if (selectedIntelligentStrategies.length > 0) {
+      setStoredStatus('selected_intelligent_strategies', selectedIntelligentStrategies.join(','));
+      fetch(apiUrl('/intelligent/strategies'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ strategies: selectedIntelligentStrategies })
+      }).catch(error => console.error('Error updating strategies:', error));
+    }
+  }, [selectedIntelligentStrategies]);
+
+  // Process WebSocket messages
+  useEffect(() => {
+    if (!lastMessage) return;
+    const data = lastMessage;
+
+    switch (data.type) {
+      case 'binance_simulation_started':
+        setStoredStatus('binance', 'running');
+        toast.success('💎 Binance real-time simulation started', { toastId: 'binance-started' });
+        setEngines(prev => ({ ...prev, binance: { ...prev.binance, status: 'running' } }));
+        break;
+
+      case 'binance_simulation_stopped':
+        setStoredStatus('binance', 'stopped');
+        toast.error('⏹️ Binance simulation stopped', { toastId: 'binance-stopped' });
+        setEngines(prev => ({ ...prev, binance: { ...prev.binance, status: 'idle' } }));
+        break;
+
+      case 'intelligent_simulation_started':
+        setStoredStatus('intelligent', 'running');
+        toast.success('🧠 Intelligent simulation with technical analysis started', { toastId: 'intelligent-started' });
+        setEngines(prev => ({ ...prev, intelligent: { ...prev.intelligent, status: 'running' } }));
+        break;
+
+      case 'intelligent_simulation_stopped':
+        setStoredStatus('intelligent', 'stopped');
+        toast.error('⏹️ Intelligent simulation stopped', { toastId: 'intelligent-stopped' });
+        setEngines(prev => ({ ...prev, intelligent: { ...prev.intelligent, status: 'idle' } }));
+        break;
+
+      case 'binance_mode_started':
+        if (data.data?.mode) {
+          const mode = data.data.mode as string;
+          setSelectedModes(prev => {
+            const updated = [...prev.filter(m => m !== mode), mode];
+            setStoredStatus('selected_binance_modes', updated.join(','));
+            return updated;
+          });
+          setEngines(prev => ({
+            ...prev,
+            [`binance_${mode}`]: {
+              ...prev[`binance_${mode}`],
+              status: 'running',
+              type: 'binance_mode',
+              trades_generated: 0,
+              errors: 0,
+              last_activity: new Date().toISOString(),
+              metadata: { mode }
+            }
+          }));
+        }
+        break;
+
+      case 'binance_mode_stopped':
+        if (data.data?.mode) {
+          const mode = data.data.mode as string;
+          setSelectedModes(prev => {
+            const updated = prev.filter(m => m !== mode);
+            setStoredStatus('selected_binance_modes', updated.join(','));
+            return updated;
+          });
+          setEngines(prev => ({
+            ...prev,
+            [`binance_${mode}`]: { ...prev[`binance_${mode}`], status: 'idle' }
+          }));
+        }
+        break;
+
+      case 'engine_started':
+        if (data.data?.engine_id) {
+          const engineId = data.data.engine_id as string;
+          setEngines(prev => ({
+            ...prev,
+            [engineId]: { ...prev[engineId], status: 'running', last_activity: new Date().toISOString() }
+          }));
+        }
+        break;
+
+      case 'engine_stopped':
+        if (data.data?.engine_id) {
+          const engineId = data.data.engine_id as string;
+          setEngines(prev => ({
+            ...prev,
+            [engineId]: { ...prev[engineId], status: 'idle', last_activity: new Date().toISOString() }
+          }));
+        }
+        break;
+
+      case 'binance_mode_trade_generated':
+        if (data.data) {
+          const pnlValue = Number(data.data.pnl ?? 0);
+          const sign = pnlValue >= 0 ? '+' : '-';
+          toast.info(`📊 Binance ${data.data.mode} trade: ${sign}$${Math.abs(pnlValue).toFixed(2)}`, {
+            toastId: `binance-${data.data.mode}-trade-${data.data.trade_id}`,
+          });
+          addTradeFromEventRef.current?.(data.data as TradeEventPayload);
+          fetchAllDataRef.current?.();
+        }
+        break;
+
+      case 'trade_added':
+      case 'real_trade_generated':
+      case 'monthly_target_trade_generated':
+      case 'intelligent_trade_generated':
+        if (data.data) addTradeFromEventRef.current?.(data.data as TradeEventPayload);
+        // Also refresh metrics/equity/alerts so stats stay in sync
+        fetchAllDataRef.current?.();
+        break;
+
+      case 'equity_updated':
+      case 'metrics_updated':
+      case 'alert_added':
+        fetchAllDataRef.current?.();
+        break;
+
+      case 'trade_deleted':
+        if (data.data?.trade_id !== undefined) {
+          removeTradeByIdRef.current?.(Number(data.data.trade_id));
+        }
+        break;
+
+      case 'trades_cleared':
+        clearTradesStateRef.current?.();
+        break;
+    }
+  }, [lastMessage, setEngines]);
+
+  // Initial data load
+  useEffect(() => {
+    fetchAllData();
+  }, [fetchAllData]);
 
   const handleBinanceModeControl = async (action: 'select' | 'generate', mode: string) => {
     try {
@@ -607,7 +284,7 @@ export default function TradingDashboard() {
         
         if (isRunning) {
           // Detener el modo
-          const response = await fetch(`http://127.0.0.1:5000/binance/mode/${mode}/stop`, { method: 'POST' });
+          const response = await fetch(`${API_BASE}/binance/mode/${mode}/stop`, { method: 'POST' });
           const result = await response.json();
           
           if (result.status === 'stopped') {
@@ -628,7 +305,7 @@ export default function TradingDashboard() {
           }
         } else {
           // Iniciar el modo
-          const response = await fetch(`http://127.0.0.1:5000/binance/mode/${mode}/start`, { method: 'POST' });
+          const response = await fetch(`${API_BASE}/binance/mode/${mode}/start`, { method: 'POST' });
           const result = await response.json();
           
           if (result.status === 'started') {
@@ -658,7 +335,7 @@ export default function TradingDashboard() {
 
   const handleGenerateBinanceTrade = useCallback(async () => {
     try {
-      const response = await fetch('http://127.0.0.1:5000/binance/generate', { method: 'POST' });
+      const response = await fetch(apiUrl('/binance/generate'), { method: 'POST' });
       if (!response.ok) throw new Error('Failed to generate Binance trade');
       await response.json().catch(() => null);
       toast.success('⚡ Binance trade generated', { toastId: 'binance-trade-generated' });
@@ -671,7 +348,7 @@ export default function TradingDashboard() {
 
   const handleGenerateIntelligentTrade = useCallback(async () => {
     try {
-      const response = await fetch('http://127.0.0.1:5000/intelligent/generate', { method: 'POST' });
+      const response = await fetch(apiUrl('/intelligent/generate'), { method: 'POST' });
       if (!response.ok) throw new Error('Failed to generate intelligent trade');
       await response.json().catch(() => null);
       toast.success('🧠 Intelligent trade generated', { toastId: 'intelligent-trade-generated' });
@@ -701,20 +378,8 @@ export default function TradingDashboard() {
     toast.info('🔄 All status cleared from localStorage', { toastId: 'status-cleared' });
   };
 
-  const handleShowMoreTrades = () => {
-    const newLimit = displayLimit + 50;
-    setDisplayLimit(newLimit);
-    setTrades(allTrades.slice(0, newLimit));
-    setHasMoreTrades(allTrades.length > newLimit);
-    toast.info(`📊 Showing ${newLimit} trades`, { toastId: 'show-more-trades' });
-  };
-
-  const handleShowAllTrades = () => {
-    setDisplayLimit(allTrades.length);
-    setTrades(allTrades);
-    setHasMoreTrades(false);
-    toast.info(`📊 Showing all ${allTrades.length} trades`, { toastId: 'show-all-trades' });
-  };
+  const handleShowMoreTrades = showMoreTrades;
+  const handleShowAllTrades = showAllTrades;
 
   const copyAllTrades = useCallback(() => {
     if (allTrades.length === 0) {
@@ -861,30 +526,8 @@ export default function TradingDashboard() {
   }, [allTrades]);
 
   const handleDeleteAllTrades = useCallback(async () => {
-    if (allTrades.length === 0 || isDeletingTrades) return;
-
-    const confirmed = window.confirm('⚠️ This will permanently delete all trades, metrics, equity history and alerts. Continue?');
-    if (!confirmed) return;
-
-    try {
-      setIsDeletingTrades(true);
-      const response = await fetch('http://127.0.0.1:5000/trades', {
-        method: 'DELETE',
-      });
-
-      if (!response.ok) {
-        throw new Error(await response.text());
-      }
-
-      toast.success('✅ Trades cleared successfully', { toastId: 'trades-cleared' });
-      await fetchAllData();
-    } catch (error) {
-      console.error('Error deleting trades:', error);
-      toast.error('❌ Failed to delete trades');
-    } finally {
-      setIsDeletingTrades(false);
-    }
-  }, [allTrades.length, isDeletingTrades, fetchAllData]);
+    await deleteAllTrades();
+  }, [deleteAllTrades]);
 
   const totalPnL = useMemo(
     () => allTrades.reduce((sum, trade) => sum + trade.pnl, 0),
@@ -982,7 +625,7 @@ export default function TradingDashboard() {
             </div>
             {/* Backend Link */}
             <a
-              href="http://127.0.0.1:5000"
+              href={API_BASE}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2 px-3 py-1.5 bg-blue-500/20 border border-blue-500/40 rounded-lg text-blue-300 hover:bg-blue-500/30 transition-colors text-xs font-mono"
@@ -1083,6 +726,9 @@ export default function TradingDashboard() {
         selectedModes={selectedModes}
         onBinanceModeControl={handleBinanceModeControl}
       />
+
+      {/* Trade Generation by Period */}
+      <TradesGenerationPanel trades={allTrades} className="mb-8" />
 
       {/* Manual Trades Log */}
       <ManualTradesLog />
@@ -1385,6 +1031,12 @@ export default function TradingDashboard() {
           </div>
         </div>
       </div>
+
+      {/* Unified Decision Engine */}
+      <DecisionPanel className="mb-8" />
+
+      {/* Dynamic Capital Allocation */}
+      <CapitalAllocation className="mb-8" />
 
       {/* Analysis Section */}
       <Analisis trades={allTrades} engines={engines} className="mb-8" />

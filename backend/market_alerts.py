@@ -94,8 +94,9 @@ class MarketAlertGenerator:
     async def get_market_data(self, symbol: str, timeframe: str) -> Optional[Dict]:
         """Obtener datos de mercado de Binance"""
         try:
-            # Obtener velas
-            klines = self.client.get_klines(
+            # Obtener velas sin bloquear el event loop
+            klines = await asyncio.to_thread(
+                self.client.get_klines,
                 symbol=symbol,
                 interval=self.client.KLINE_INTERVAL_1HOUR if timeframe == '1h' else 
                           self.client.KLINE_INTERVAL_4HOUR if timeframe == '4h' else 
@@ -110,7 +111,7 @@ class MarketAlertGenerator:
             lows = [float(k[3]) for k in klines]
             
             # Precio actual
-            ticker = self.client.get_symbol_ticker(symbol=symbol)
+            ticker = await asyncio.to_thread(self.client.get_symbol_ticker, symbol=symbol)
             current_price = float(ticker['price'])
             
             # Análisis técnico
