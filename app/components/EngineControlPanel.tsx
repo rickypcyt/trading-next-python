@@ -1,6 +1,7 @@
 'use client';
 
-import { API_BASE, apiUrl } from '@/lib/api';
+import { API_BASE, apiFetch, apiUrl, describeFetchError } from '@/lib/api';
+import { PanelState } from './PanelState';
 import React, { useState, useEffect, useCallback, type SetStateAction } from 'react';
 import {
   Settings, Play, Pause,
@@ -421,6 +422,7 @@ const EngineControlPanel: React.FC<EngineControlPanelProps> = ({
 }) => {
   const [engines, setEngines] = useState<Record<string, Engine>>({});
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedEngines, setSelectedEngines] = useState<Set<string>>(() => getSavedRunningEngines());
   const [selectedEngine, setSelectedEngine] = useState<string | null>(null);
   const [engineMetrics, setEngineMetrics] = useState<Record<string, {
@@ -434,17 +436,18 @@ const EngineControlPanel: React.FC<EngineControlPanelProps> = ({
 
   const fetchEngines = useCallback(async () => {
     try {
-      const res = await fetch(apiUrl('/engines'));
-      if (!res.ok) throw new Error();
+      const res = await apiFetch('/engines');
+      if (!res.ok) throw new Error(`El backend respondió HTTP ${res.status}.`);
       const data = await res.json();
       setEngines(data.engines ?? {});
+      setLoadError(null);
 
       const running = Object.entries(data.engines ?? {})
         .filter(([, e]) => (e as Engine).status === 'running')
         .map(([id]) => id);
       setSelectedEngines(new Set(running));
-    } catch {
-      toast.error('Error al cargar engines');
+    } catch (err) {
+      setLoadError(describeFetchError(err));
     } finally {
       setLoading(false);
     }
@@ -561,6 +564,22 @@ const EngineControlPanel: React.FC<EngineControlPanelProps> = ({
           </div>
           <span className="text-[11px] font-mono uppercase tracking-[0.4em] text-gray-500">Cargando engines…</span>
         </div>
+      </div>
+    );
+  }
+
+  if (loadError && engineList.length === 0) {
+    return (
+      <div className={`${className} rounded-2xl border border-gray-800 bg-gray-950`}>
+        <PanelState kind="error" title="No se pudieron cargar los engines" hint={loadError} onRetry={() => { setLoading(true); fetchEngines(); }} />
+      </div>
+    );
+  }
+
+  if (!loadError && engineList.length === 0) {
+    return (
+      <div className={`${className} rounded-2xl border border-gray-800 bg-gray-950`}>
+        <PanelState kind="empty" title="No hay engines registrados" hint="El backend respondió pero no devolvió ningún engine. Revisa el log del backend al arrancar." />
       </div>
     );
   }

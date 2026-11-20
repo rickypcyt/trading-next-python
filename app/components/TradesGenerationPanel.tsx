@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { BarChart3, Calendar } from 'lucide-react';
 import type { Trade } from '../types';
+import { PanelState } from './PanelState';
 
 type Granularity = 'hour' | 'day' | 'week' | 'month';
 
@@ -114,7 +115,7 @@ export default function TradesGenerationPanel({ trades, className = '' }: Trades
       </div>
 
       {data.length === 0 ? (
-        <p className="text-gray-400 text-center py-8">No trades available for the selected period.</p>
+        <PanelState kind="empty" title="Sin trades en este periodo" hint="Cuando los engines ejecuten trades verás aquí cuántos se generan por hora, día, semana o mes. Prueba con otra granularidad." />
       ) : (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">

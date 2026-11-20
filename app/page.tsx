@@ -15,6 +15,8 @@ import TradesTable from './components/TradesTable';
 import TradingViewWidget from './components/TradingViewWidget';
 import { useDashboardData } from './hooks/useDashboardData';
 import { useWebSocket } from './hooks/useWebSocket';
+import ConnectionBanner from './components/ConnectionBanner';
+import { PanelState, SectionHeader } from './components/PanelState';
 import { toast } from 'react-toastify';
 
 import type { Alert, BinanceModeStatusMap, Engine, EquityPoint, Metric, Trade, TradeEventPayload, TradingMode } from './types';
@@ -83,6 +85,9 @@ export default function TradingDashboard() {
     hasMoreTrades,
     isRefreshing,
     isDeletingTrades,
+    backendStatus,
+    lastError,
+    lastUpdated,
     fetchAllData,
     addTradeFromEvent,
     removeTradeById,
@@ -93,7 +98,7 @@ export default function TradingDashboard() {
     setEngines,
   } = useDashboardData();
 
-  const { status: wsStatus, lastMessage } = useWebSocket(WS_URL);
+  const { status: wsStatus, attempts: wsAttempts, lastMessage } = useWebSocket(WS_URL);
 
   const [selectedIntelligentStrategies, setSelectedIntelligentStrategies] = useState<string[]>([
     'MACD_Signal', 'MA_Cross', 'RSI_Divergence', 'Bollinger_Bands', 'Volume_Breakout', 'Support_Resistance'
@@ -608,7 +613,14 @@ export default function TradingDashboard() {
                 wsStatus === 'connected' ? 'bg-green-400' : 
                 wsStatus === 'error' ? 'bg-red-400' : 'text-gray-500'
               }`}></div>
-              WebSocket: {wsStatus}
+              {wsStatus === 'connected'
+                ? 'Tiempo real: conectado'
+                : wsAttempts === 0 && (wsStatus === 'connecting' || wsStatus === 'disconnected')
+                  ? 'Tiempo real: conectando…'
+                  : `Tiempo real: sin conexión${wsAttempts > 0 ? ` (reintento ${wsAttempts})` : ''}`}
+              {lastUpdated && (
+                <span className="text-xs text-gray-600 ml-2">· actualizado {lastUpdated.toLocaleTimeString()}</span>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-4 text-sm text-gray-400">
@@ -620,7 +632,9 @@ export default function TradingDashboard() {
                   : 'bg-gray-500'
               }`}></div>
               <span className="text-gray-300">
-                Engines: {Object.values(engines).filter(e => e.status === 'running').length}/{Object.keys(engines).length}
+                {backendStatus === 'offline'
+                  ? 'Engines: sin datos'
+                  : `Engines: ${Object.values(engines).filter(e => e.status === 'running').length}/${Object.keys(engines).length}`}
               </span>
             </div>
             {/* Backend Link */}
@@ -631,7 +645,7 @@ export default function TradingDashboard() {
               className="flex items-center gap-2 px-3 py-1.5 bg-blue-500/20 border border-blue-500/40 rounded-lg text-blue-300 hover:bg-blue-500/30 transition-colors text-xs font-mono"
             >
               <ExternalLink className="w-3 h-3" />
-              Backend
+              {backendStatus === 'online' ? 'Backend' : backendStatus === 'offline' ? 'Backend ⚠' : 'Backend…'}
             </a>
           </div>
         </div>
@@ -656,94 +670,9 @@ export default function TradingDashboard() {
       {/* Main Content */}
       <div className="p-4">
 
-      {/* Alerts Panel */}
-      <div className="bg-gray-950/50 border border-gray-800 rounded-lg p-6 backdrop-blur-sm mb-8">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-semibold flex items-center gap-2 text-cyan-400">
-            <Bell className="w-5 h-5" />
-            Recent Alerts
-          </h2>
-          <div className="text-sm text-gray-400">
-            Total: {alerts.length} alerts
-          </div>
-        </div>
+      <ConnectionBanner backendStatus={backendStatus} wsStatus={wsStatus} error={lastError} onRetry={() => fetchAllData()} />
 
-        {alerts.length === 0 ? (
-          <div className="text-center py-8 text-gray-500">
-            <Bell className="w-12 h-12 mx-auto mb-4 opacity-50" />
-            <div className="text-sm">No alerts yet</div>
-            <div className="text-xs mt-2">Alerts will appear here when trades are executed</div>
-          </div>
-        ) : (
-          <>
-            <div className="space-y-2">
-              {alerts.map(alert => {
-                const alertTime = new Date(alert.timestamp);
-                const timeAgo = getTimeAgo(alertTime);
-                const alertStyle = getAlertStyle(alert.type);
-
-                return (
-                  <div
-                    key={alert.id}
-                    className={`flex items-center justify-between p-4 ${alertStyle.bg} ${alertStyle.border} border rounded-lg hover:opacity-80 transition-all`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="text-2xl">{alertStyle.icon}</div>
-                      <div>
-                        <div className={`font-bold ${alertStyle.color} font-mono`}>
-                          {alert.type.replace('_', ' ')}
-                        </div>
-                        <div className="text-sm text-gray-300 mt-1">
-                          {alert.message}
-                        </div>
-                        <div className="text-xs text-gray-500 mt-1">
-                          {alertTime.toLocaleDateString()} at {alertTime.toLocaleTimeString()}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-xs text-gray-500">{timeAgo}</div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* Engine Control Panel */}
-      <EngineControlPanel
-        className="mb-8"
-        onGenerateBinanceTrade={handleGenerateBinanceTrade}
-        onClearTrades={handleDeleteAllTrades}
-        onResetStatus={handleClearAllStatus}
-        onGenerateIntelligentTrade={handleGenerateIntelligentTrade}
-        selectedIntelligentStrategies={selectedIntelligentStrategies}
-        setSelectedIntelligentStrategies={setSelectedIntelligentStrategies}
-        tradingModes={tradingModes}
-        binanceModeStatus={binanceModeStatus}
-        selectedModes={selectedModes}
-        onBinanceModeControl={handleBinanceModeControl}
-      />
-
-      {/* Trade Generation by Period */}
-      <TradesGenerationPanel trades={allTrades} className="mb-8" />
-
-      {/* Manual Trades Log */}
-      <ManualTradesLog />
-
-      {/* TradingView Widget */}
-      <div className="mb-8 bg-gray-950/50 border border-gray-800 rounded-lg p-6 backdrop-blur-sm">
-        <h2 className="text-xl font-semibold mb-4 flex items-center gap-2 text-cyan-400">
-          <TrendingUp className="w-5 h-5" />
-          Market Overview
-        </h2>
-        <div className="h-[600px]">
-          <TradingViewWidget />
-        </div>
-      </div>
-
+      <SectionHeader title="Resumen" hint="Rendimiento global" />
       {/* Metrics Panel */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
         <div className="bg-gray-950/50 border border-gray-800 rounded-lg p-6 backdrop-blur-sm">
@@ -762,7 +691,7 @@ export default function TradingDashboard() {
             <Activity className="w-5 h-5 text-cyan-400" />
           </div>
           <div className="text-2xl font-bold text-cyan-400 font-mono">
-            {metrics ? `${(metrics.win_rate * 100).toFixed(1)}%` : 'N/A'}
+            {metrics ? `${(metrics.win_rate * 100).toFixed(1)}%` : <span className="text-base text-gray-500" title="Se calcula cuando hay trades cerrados">Sin datos</span>}
           </div>
         </div>
         
@@ -772,7 +701,7 @@ export default function TradingDashboard() {
             <DollarSign className="w-5 h-5 text-purple-400" />
           </div>
           <div className="text-2xl font-bold text-purple-400 font-mono">
-            {metrics ? metrics.sharpe.toFixed(2) : 'N/A'}
+            {metrics ? metrics.sharpe.toFixed(2) : <span className="text-base text-gray-500" title="Se calcula cuando hay trades cerrados">Sin datos</span>}
           </div>
         </div>
         
@@ -782,7 +711,7 @@ export default function TradingDashboard() {
             <AlertTriangle className="w-5 h-5 text-orange-400" />
           </div>
           <div className="text-2xl font-bold text-orange-400 font-mono">
-            {metrics ? `${metrics.max_drawdown.toFixed(2)}%` : 'N/A'}
+            {metrics ? `${metrics.max_drawdown.toFixed(2)}%` : <span className="text-base text-gray-500" title="Se calcula cuando hay trades cerrados">Sin datos</span>}
           </div>
         </div>
 
@@ -807,7 +736,137 @@ export default function TradingDashboard() {
         </div>
       </div>
 
+      {/* Charts */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        {/* Equity Curve */}
+        <div className="bg-gray-950/50 border border-gray-800 rounded-lg p-6 backdrop-blur-sm lg:col-span-2">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-semibold text-cyan-400">Equity Curve - Complete History</h2>
+            <div className="flex items-center gap-4 text-sm">
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 bg-green-400 rounded-full"></div>
+                <span className="text-gray-400">Capital Inicial ($100)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 bg-cyan-400 rounded-full"></div>
+                <span className="text-gray-400">Capital Actual</span>
+              </div>
+            </div>
+          </div>
+          {realEquityData.length === 0 ? (
+            <PanelState
+              kind={backendStatus === 'offline' ? 'error' : 'empty'}
+              title={backendStatus === 'offline' ? 'No se puede dibujar la curva: backend sin conexión' : 'La curva de capital aparecerá con los primeros trades'}
+              hint={backendStatus === 'offline' ? lastError ?? undefined : 'Cada trade cerrado añade un punto con el capital resultante (parte de $100).'}
+              onRetry={() => fetchAllData()}
+            />
+          ) : (
+          <ResponsiveContainer width="100%" height={400}>
+              <AreaChart data={realEquityData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1F2937" />
+                <XAxis 
+                  dataKey="timestamp" 
+                  stroke="#4B5563"
+                  tick={{ fontSize: 12 }}
+                  tickFormatter={(value) => new Date(value).toLocaleDateString()}
+                />
+                <YAxis 
+                  stroke="#4B5563"
+                  tick={{ fontSize: 12 }}
+                  tickFormatter={(value) => `$${value}`}
+                  domain={['dataMin - 5', 'dataMax + 5']} // Ajuste automático con margen
+                />
+                <Tooltip 
+                  contentStyle={{ 
+                    backgroundColor: '#111827', 
+                    border: '1px solid #374151',
+                    borderRadius: '8px'
+                  }}
+                  labelStyle={{ color: '#F3F4F6' }}
+                  formatter={(value: number) => [`$${value}`, 'Capital']}
+                  labelFormatter={(label) => `Fecha: ${new Date(label).toLocaleString()}`}
+                />
+                <defs>
+                  <linearGradient id="capitalGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#06B6D4" stopOpacity={0.8}/>
+                    <stop offset="95%" stopColor="#06B6D4" stopOpacity={0.1}/>
+                  </linearGradient>
+                </defs>
+                <Area 
+                  type="monotone" 
+                  dataKey="capital" 
+                  stroke="#06B6D4" 
+                  strokeWidth={2}
+                  fill="url(#capitalGradient)"
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          )}
+          
+          {/* Estadísticas adicionales debajo del gráfico */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-6 pt-6 border-t border-gray-800">
+            <div className="text-center">
+              <div className="text-gray-400 text-sm mb-1">Capital Inicial</div>
+              <div className="text-white font-mono font-bold">$100.00</div>
+            </div>
+            <div className="text-center">
+              <div className="text-gray-400 text-sm mb-1">Capital Actual</div>
+              <div className={`font-mono font-bold ${totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                ${(100 + totalPnL).toFixed(2)}
+              </div>
+            </div>
+            <div className="text-center">
+              <div className="text-gray-400 text-sm mb-1">Total P&L</div>
+              <div className={`font-mono font-bold ${totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {totalPnL >= 0 ? '+' : ''}${totalPnL.toFixed(2)}
+              </div>
+            </div>
+            <div className="text-center">
+              <div className="text-gray-400 text-sm mb-1">Retorno %</div>
+              <div className={`font-mono font-bold ${totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {totalPnL >= 0 ? '+' : ''}{totalPnL.toFixed(1)}%
+              </div>
+            </div>
+            <div className="text-center">
+              <div className="text-gray-400 text-sm mb-1">Progreso Mensual</div>
+              <div className={`font-mono font-bold ${totalPnL >= 20 ? 'text-green-400' : totalPnL >= 0 ? 'text-cyan-400' : 'text-red-400'}`}>
+                {Math.min(100, Math.max(0, (totalPnL / 20) * 100)).toFixed(0)}%
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <SectionHeader title="Decisión y capital" hint="Qué operar y con cuánto" />
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-8 items-start">
+      {/* Unified Decision Engine */}
+      <DecisionPanel className="" />
+      {/* Dynamic Capital Allocation */}
+      <CapitalAllocation className="" />
+      </div>
+
+      <SectionHeader title="Engines" hint="Control y rendimiento por motor" />
+      {/* Engine Control Panel */}
+      <EngineControlPanel
+        className="mb-8"
+        onGenerateBinanceTrade={handleGenerateBinanceTrade}
+        onClearTrades={handleDeleteAllTrades}
+        onResetStatus={handleClearAllStatus}
+        onGenerateIntelligentTrade={handleGenerateIntelligentTrade}
+        selectedIntelligentStrategies={selectedIntelligentStrategies}
+        setSelectedIntelligentStrategies={setSelectedIntelligentStrategies}
+        tradingModes={tradingModes}
+        binanceModeStatus={binanceModeStatus}
+        selectedModes={selectedModes}
+        onBinanceModeControl={handleBinanceModeControl}
+      />
+
+      {/* Analysis Section */}
+      <Analisis trades={allTrades} engines={engines} className="mb-8" />
+
+      <SectionHeader title="Trades" hint="Historial y libro de órdenes" />
       {/* All Trades Table */}
+      <div className="mb-8">
         <TradesTable
           trades={trades}
           allTrades={allTrades}
@@ -820,6 +879,7 @@ export default function TradingDashboard() {
           onDeleteAllTrades={handleDeleteAllTrades}
           isDeletingAllTrades={isDeletingTrades}
         />
+      </div>
 
       {/* Order Book de Nuestros Trades */}
       <div className="bg-gray-950/50 border border-gray-800 rounded-lg p-6 backdrop-blur-sm mb-8">
@@ -940,108 +1000,79 @@ export default function TradingDashboard() {
         )}
       </div>
 
-      {/* Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-        {/* Equity Curve */}
-        <div className="bg-gray-950/50 border border-gray-800 rounded-lg p-6 backdrop-blur-sm lg:col-span-2">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-xl font-semibold text-cyan-400">Equity Curve - Complete History</h2>
-            <div className="flex items-center gap-4 text-sm">
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 bg-green-400 rounded-full"></div>
-                <span className="text-gray-400">Capital Inicial ($100)</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 bg-cyan-400 rounded-full"></div>
-                <span className="text-gray-400">Capital Actual</span>
-              </div>
-            </div>
-          </div>
-          <ResponsiveContainer width="100%" height={400}>
-            <AreaChart data={realEquityData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1F2937" />
-              <XAxis 
-                dataKey="timestamp" 
-                stroke="#4B5563"
-                tick={{ fontSize: 12 }}
-                tickFormatter={(value) => new Date(value).toLocaleDateString()}
-              />
-              <YAxis 
-                stroke="#4B5563"
-                tick={{ fontSize: 12 }}
-                tickFormatter={(value) => `$${value}`}
-                domain={['dataMin - 5', 'dataMax + 5']} // Ajuste automático con margen
-              />
-              <Tooltip 
-                contentStyle={{ 
-                  backgroundColor: '#111827', 
-                  border: '1px solid #374151',
-                  borderRadius: '8px'
-                }}
-                labelStyle={{ color: '#F3F4F6' }}
-                formatter={(value: number) => [`$${value}`, 'Capital']}
-                labelFormatter={(label) => `Fecha: ${new Date(label).toLocaleString()}`}
-              />
-              <defs>
-                <linearGradient id="capitalGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#06B6D4" stopOpacity={0.8}/>
-                  <stop offset="95%" stopColor="#06B6D4" stopOpacity={0.1}/>
-                </linearGradient>
-              </defs>
-              <Area 
-                type="monotone" 
-                dataKey="capital" 
-                stroke="#06B6D4" 
-                strokeWidth={2}
-                fill="url(#capitalGradient)"
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-          
-          {/* Estadísticas adicionales debajo del gráfico */}
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-6 pt-6 border-t border-gray-800">
-            <div className="text-center">
-              <div className="text-gray-400 text-sm mb-1">Capital Inicial</div>
-              <div className="text-white font-mono font-bold">$100.00</div>
-            </div>
-            <div className="text-center">
-              <div className="text-gray-400 text-sm mb-1">Capital Actual</div>
-              <div className={`font-mono font-bold ${totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                ${(100 + totalPnL).toFixed(2)}
-              </div>
-            </div>
-            <div className="text-center">
-              <div className="text-gray-400 text-sm mb-1">Total P&L</div>
-              <div className={`font-mono font-bold ${totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                {totalPnL >= 0 ? '+' : ''}${totalPnL.toFixed(2)}
-              </div>
-            </div>
-            <div className="text-center">
-              <div className="text-gray-400 text-sm mb-1">Retorno %</div>
-              <div className={`font-mono font-bold ${totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                {totalPnL >= 0 ? '+' : ''}{totalPnL.toFixed(1)}%
-              </div>
-            </div>
-            <div className="text-center">
-              <div className="text-gray-400 text-sm mb-1">Progreso Mensual</div>
-              <div className={`font-mono font-bold ${totalPnL >= 20 ? 'text-green-400' : totalPnL >= 0 ? 'text-cyan-400' : 'text-red-400'}`}>
-                {Math.min(100, Math.max(0, (totalPnL / 20) * 100)).toFixed(0)}%
-              </div>
-            </div>
+      {/* Trade Generation by Period */}
+      <TradesGenerationPanel trades={allTrades} className="mb-8" />
+
+      <SectionHeader title="Herramientas" hint="Manual, alertas y mercado" />
+      {/* Manual Trades Log */}
+      <ManualTradesLog />
+      <div className="mb-8" />
+      {/* Alerts Panel */}
+      <div className="bg-gray-950/50 border border-gray-800 rounded-lg p-6 backdrop-blur-sm mb-8">
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-semibold flex items-center gap-2 text-cyan-400">
+            <Bell className="w-5 h-5" />
+            Recent Alerts
+          </h2>
+          <div className="text-sm text-gray-400">
+            Total: {alerts.length} alerts
           </div>
         </div>
+
+        {alerts.length === 0 ? (
+          <div className="text-center py-8 text-gray-500">
+            <Bell className="w-12 h-12 mx-auto mb-4 opacity-50" />
+            <div className="text-sm">No alerts yet</div>
+            <div className="text-xs mt-2">Alerts will appear here when trades are executed</div>
+          </div>
+        ) : (
+          <>
+            <div className="space-y-2">
+              {alerts.map(alert => {
+                const alertTime = new Date(alert.timestamp);
+                const timeAgo = getTimeAgo(alertTime);
+                const alertStyle = getAlertStyle(alert.type);
+
+                return (
+                  <div
+                    key={alert.id}
+                    className={`flex items-center justify-between p-4 ${alertStyle.bg} ${alertStyle.border} border rounded-lg hover:opacity-80 transition-all`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="text-2xl">{alertStyle.icon}</div>
+                      <div>
+                        <div className={`font-bold ${alertStyle.color} font-mono`}>
+                          {alert.type.replace('_', ' ')}
+                        </div>
+                        <div className="text-sm text-gray-300 mt-1">
+                          {alert.message}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {alertTime.toLocaleDateString()} at {alertTime.toLocaleTimeString()}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-xs text-gray-500">{timeAgo}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
       </div>
 
-      {/* Unified Decision Engine */}
-      <DecisionPanel className="mb-8" />
-
-      {/* Dynamic Capital Allocation */}
-      <CapitalAllocation className="mb-8" />
-
-      {/* Analysis Section */}
-      <Analisis trades={allTrades} engines={engines} className="mb-8" />
-
-      
+      {/* TradingView Widget */}
+      <div className="mb-8 bg-gray-950/50 border border-gray-800 rounded-lg p-6 backdrop-blur-sm">
+        <h2 className="text-xl font-semibold mb-4 flex items-center gap-2 text-cyan-400">
+          <TrendingUp className="w-5 h-5" />
+          Market Overview
+        </h2>
+        <div className="h-[600px]">
+          <TradingViewWidget />
+        </div>
+      </div>
       </div>
     </div>
   );

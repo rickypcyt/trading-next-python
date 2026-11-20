@@ -6,6 +6,7 @@ from binance_simulator import BinanceDataSimulator
 from database import get_db, Trade, EquityCurve, Metric, Alert
 from signal_interface import BinanceModeSignalEmitter
 from datetime import datetime, timedelta
+from fair_odds import fair_win_probability_rr
 import random
 import asyncio
 
@@ -172,12 +173,8 @@ class BinanceModeSimulator(BinanceDataSimulator):
             trend_factor = random.uniform(-1, 1)  # -1 (bearish) a 1 (bullish)
             
             # Ajustar probabilidad según tendencia y modo
-            base_win_rate = self.mode.win_rate
-            trend_adjustment = trend_factor * 0.1  # ±10% de ajuste
-            adjusted_win_rate = max(0.1, min(0.9, base_win_rate + trend_adjustment))
-            
-            # Decidir si es trade ganador basado en análisis real
-            is_winner = random.random() < adjusted_win_rate
+            # Probabilidad justa segun ratio recompensa:riesgo (sin win rate inventado)
+            is_winner = random.random() < fair_win_probability_rr(self.mode.reward_risk_ratio)
             
             # Tiempo de holding según modo
             holding_minutes = {
@@ -216,7 +213,7 @@ class BinanceModeSimulator(BinanceDataSimulator):
             entry_price = base_price
             
             # Mantener lógica original como fallback
-            is_winner = random.random() < self.mode.win_rate
+            is_winner = random.random() < fair_win_probability_rr(self.mode.reward_risk_ratio)
             hold_time = 10  # Default 10 minutos
             
             if is_winner:

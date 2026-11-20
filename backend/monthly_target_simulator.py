@@ -5,6 +5,7 @@ Simulador optimizado para 20% mensual consistente
 from simulator import TradingSimulator
 from database import get_db, Trade, EquityCurve, Metric, Alert
 from datetime import datetime, timedelta
+from fair_odds import fair_win_probability_rr
 import random
 import asyncio
 import requests
@@ -63,8 +64,8 @@ class MonthlyTargetSimulator(TradingSimulator):
         print(f"💰 Precio real BTC: ${real_btc_price:.2f}")
         
         # Parámetros de la estrategia moderada
-        win_rate = 0.55  # 55% win rate
         risk_reward = 3.0  # 1:3 risk/reward
+        win_rate = fair_win_probability_rr(risk_reward)  # 25%: sin edge inventado
         
         position_size = self.calculate_position_size(0.04)  # 4% riesgo
         potential_loss = position_size * 0.04  # 4% de riesgo

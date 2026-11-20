@@ -1,6 +1,6 @@
 'use client';
 
-import { API_BASE, apiUrl } from '@/lib/api';
+import { API_BASE, apiFetch, apiUrl, describeFetchError } from '@/lib/api';
 import { useEffect, useState } from 'react';
 import { Activity, Brain, RefreshCw, Shield, Target } from 'lucide-react';
 
@@ -44,12 +44,12 @@ export default function DecisionPanel({ className = '' }: { className?: string }
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/strategy/summary?symbol=${sym}`);
-      if (!res.ok) throw new Error('Error cargando análisis');
+      const res = await apiFetch(`/strategy/summary?symbol=${sym}`, {}, 20000);
+      if (!res.ok) throw new Error(`El backend respondió HTTP ${res.status} al analizar ${sym}.`);
       const data = await res.json();
       setAnalysis(data);
     } catch (err: any) {
-      setError(err.message || 'Error de conexión');
+      setError(describeFetchError(err));
     } finally {
       setLoading(false);
     }
@@ -127,11 +127,12 @@ export default function DecisionPanel({ className = '' }: { className?: string }
       {error && (
         <div className="mb-4 p-3 bg-rose-500/20 border border-rose-500/30 text-rose-200 rounded">
           {error}
+          <button type="button" onClick={() => fetchAnalysis(symbol)} className="ml-3 underline text-rose-100 hover:text-white">Reintentar</button>
         </div>
       )}
 
       {!analysis && !loading && !error && (
-        <div className="text-gray-400">No hay datos de análisis.</div>
+        <div className="text-gray-400 text-sm">Sin análisis todavía. Pulsa el botón de actualizar (↻) para analizar {symbol}.</div>
       )}
 
       {loading && !analysis && (

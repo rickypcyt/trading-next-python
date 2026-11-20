@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'react-toastify';
-import { apiUrl } from '@/lib/api';
+import { apiFetch, describeFetchError } from '@/lib/api';
 import type {
   Alert,
   Engine,
@@ -93,6 +93,11 @@ export function useDashboardData() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isDeletingTrades, setIsDeletingTrades] = useState(false);
   const [displayLimit, setDisplayLimit] = useState(INITIAL_DISPLAY_LIMIT);
+  const [backendStatus, setBackendStatus] = useState<'loading' | 'online' | 'offline'>('loading');
+  const [lastError, setLastError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const backendStatusRef = useRef(backendStatus);
+  useEffect(() => { backendStatusRef.current = backendStatus; }, [backendStatus]);
 
   const isRefreshingRef = useRef(isRefreshing);
   isRefreshingRef.current = isRefreshing;
@@ -100,11 +105,16 @@ export function useDashboardData() {
   displayLimitRef.current = displayLimit;
   const fetchAllDataRef = useRef<() => Promise<void>>(async () => {});
 
-  // Polling periódico: refresca datos cada 15s como fallback del WebSocket
+  // Polling: cada 15s como fallback del WebSocket, y cada 5s mientras el backend esté caído
+  // para recuperarse solo en cuanto vuelva.
   useEffect(() => {
+    let tick = 0;
     const interval = setInterval(() => {
-      fetchAllDataRef.current();
-    }, 15000);
+      tick += 1;
+      if (backendStatusRef.current !== 'online' || tick % 3 === 0) {
+        fetchAllDataRef.current();
+      }
+    }, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -129,12 +139,15 @@ export function useDashboardData() {
     setIsRefreshing(true);
     try {
       const [tradesRes, metricsRes, alertsRes, modesRes, enginesRes] = await Promise.all([
-        fetch(apiUrl('/trades')),
-        fetch(apiUrl('/metrics')),
-        fetch(apiUrl('/alerts')),
-        fetch(apiUrl('/binance/modes')).catch(() => null),
-        fetch(apiUrl('/engines'))
+        apiFetch('/trades'),
+        apiFetch('/metrics'),
+        apiFetch('/alerts'),
+        apiFetch('/binance/modes').catch(() => null),
+        apiFetch('/engines')
       ]);
+      if (!tradesRes.ok || !metricsRes.ok || !alertsRes.ok || !enginesRes.ok) {
+        throw new Error(`El backend respondió con error (HTTP ${[tradesRes, metricsRes, alertsRes, enginesRes].find(r => !r.ok)?.status}).`);
+      }
 
       const [tradesData, metricsData, alertsData, modesData, enginesData] = await Promise.all([
         tradesRes.json(),
@@ -156,9 +169,13 @@ export function useDashboardData() {
       setMetrics(metricsData[0] || null);
       setAlerts(alertsData);
       setTradingModes(modesData.modes || {});
+      setBackendStatus('online');
+      setLastError(null);
+      setLastUpdated(new Date());
     } catch (error) {
       console.error('Error fetching data:', error);
-      toast.error('Error loading dashboard data', { toastId: 'fetch-error' });
+      setBackendStatus('offline');
+      setLastError(describeFetchError(error));
     } finally {
       setIsRefreshing(false);
     }
@@ -219,7 +236,7 @@ export function useDashboardData() {
 
     setIsDeletingTrades(true);
     try {
-      const response = await fetch(apiUrl('/trades'), { method: 'DELETE' });
+      const response = await apiFetch('/trades', { method: 'DELETE' });
       if (!response.ok) throw new Error(await response.text());
       toast.success('Trades cleared successfully', { toastId: 'trades-cleared' });
       await fetchAllData();
@@ -243,6 +260,9 @@ export function useDashboardData() {
     hasMoreTrades,
     isRefreshing,
     isDeletingTrades,
+    backendStatus,
+    lastError,
+    lastUpdated,
     fetchAllData,
     addTradeFromEvent,
     removeTradeById,

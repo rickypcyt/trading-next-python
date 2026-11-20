@@ -10,6 +10,7 @@ export interface WebSocketMessage {
 export function useWebSocket(url: string) {
   const [status, setStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
   const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null);
+  const [attempts, setAttempts] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -35,6 +36,7 @@ export function useWebSocket(url: string) {
           if (!mounted) return;
           setStatus('connected');
           reconnectAttemptsRef.current = 0;
+          setAttempts(0);
           if (!toastShownRef.current) {
             toast.success('WebSocket connected', { autoClose: 2000, toastId: 'ws-connected' });
             toastShownRef.current = true;
@@ -75,6 +77,7 @@ export function useWebSocket(url: string) {
           // Attempt 1: 300ms, 2: 1s, 3: 2s, 4: 4s, 5+: 8s, max 15s
           reconnectAttemptsRef.current += 1;
           const attempt = reconnectAttemptsRef.current;
+          setAttempts(attempt);
           const delay = attempt === 1
             ? 300  // First reconnect: almost instant
             : Math.min(1000 * 2 ** (attempt - 2), 15000);
@@ -106,5 +109,5 @@ export function useWebSocket(url: string) {
     };
   }, [url]);
 
-  return { status, lastMessage, send: wsRef.current?.send.bind(wsRef.current) };
+  return { status, attempts, lastMessage, send: wsRef.current?.send.bind(wsRef.current) };
 }

@@ -422,8 +422,9 @@ class CentralEngineManager:
         print("✅ All engines shut down")
         
         # Cerrar sesión de base de datos
-        if self.db_session:
-            self.db_session.close()
+        db_session = getattr(self, "db_session", None)
+        if db_session:
+            db_session.close()
 
 # Instancia global del gestor
 engine_manager = CentralEngineManager()

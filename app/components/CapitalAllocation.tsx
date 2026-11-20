@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { TrendingUp, TrendingDown, Wallet, Zap } from 'lucide-react';
-import { apiUrl } from '@/lib/api';
+import { apiFetch, describeFetchError } from '@/lib/api';
+import { PanelState } from './PanelState';
 
 interface EngineAllocation {
   base_allocation: number;
@@ -25,16 +26,19 @@ interface AllocationData {
 export default function CapitalAllocation({ className }: { className?: string }) {
   const [allocation, setAllocation] = useState<AllocationData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchAllocation = async () => {
       try {
-        const res = await fetch(apiUrl('/capital/allocation'));
-        if (!res.ok) return;
+        const res = await apiFetch('/capital/allocation');
+        if (!res.ok) throw new Error(`El backend respondió HTTP ${res.status}.`);
         const data = await res.json();
         setAllocation(data);
+        setError(null);
       } catch (e) {
         console.error('Error fetching capital allocation:', e);
+        setError(describeFetchError(e));
       } finally {
         setLoading(false);
       }
@@ -48,13 +52,25 @@ export default function CapitalAllocation({ className }: { className?: string })
   if (loading) {
     return (
       <div className={`bg-slate-900/80 backdrop-blur-sm rounded-xl border border-slate-800 p-6 ${className}`}>
-        <div className="animate-pulse text-slate-500">Cargando allocation...</div>
+        <PanelState kind="loading" title="Cargando asignación de capital…" hint="Si tarda más de unos segundos, el backend no está respondiendo." />
       </div>
     );
   }
 
-  if (!allocation || !allocation.allocations) {
-    return null;
+  if (error && !allocation) {
+    return (
+      <div className={`bg-slate-900/80 backdrop-blur-sm rounded-xl border border-slate-800 p-6 ${className}`}>
+        <PanelState kind="error" title="No se pudo cargar la asignación de capital" hint={error} onRetry={() => window.location.reload()} />
+      </div>
+    );
+  }
+
+  if (!allocation || !allocation.allocations || Object.keys(allocation.allocations).length === 0) {
+    return (
+      <div className={`bg-slate-900/80 backdrop-blur-sm rounded-xl border border-slate-800 p-6 ${className}`}>
+        <PanelState kind="empty" title="Aún no hay asignación de capital" hint="Se calcula a partir del rendimiento de cada engine; aparecerá cuando haya trades cerrados." />
+      </div>
+    );
   }
 
   const engines = Object.entries(allocation.allocations).sort(

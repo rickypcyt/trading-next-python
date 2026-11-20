@@ -1,3 +1,4 @@
+from fair_odds import fair_win_probability
 import random
 from datetime import datetime, timedelta
 from typing import Dict, Optional
@@ -94,7 +95,7 @@ class UnifiedStrategyEngine:
             return {"status": "error", "message": "Tamaño de posición calculado en cero"}
 
         # Simulate exit based on the decision score
-        win_probability = min(analysis["score"] / 100.0, 0.95)
+        win_probability = fair_win_probability(current_price, take_profit, stop_loss)
         if random.random() < win_probability:
             exit_price = take_profit
             exit_reason = "take_profit"

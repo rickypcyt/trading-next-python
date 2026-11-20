@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# research (datos descargados y resultados locales)
+backend/research/data/
+backend/research/results/

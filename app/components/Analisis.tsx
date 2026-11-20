@@ -5,6 +5,7 @@ import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer,
 
 import { Trade } from '../types';
 import { useMemo } from 'react';
+import { PanelState } from './PanelState';
 
 interface AnalisisProps {
   trades: Trade[];
@@ -162,6 +163,18 @@ export default function Analisis({ trades, engines, className = '' }: AnalisisPr
   const formatPercentage = (value: number) => {
     return `${value.toFixed(2)}%`;
   };
+
+  if (trades.length === 0 && Object.keys(engines).length === 0) {
+    return (
+      <div className={`bg-gray-950/50 border border-gray-800 rounded-lg backdrop-blur-sm ${className}`}>
+        <PanelState
+          kind="empty"
+          title="Análisis de engines sin datos"
+          hint="Aquí se compara el rendimiento de cada engine (P&L, win rate, profit factor). Aparecerá en cuanto el backend responda y haya trades."
+        />
+      </div>
+    );
+  }
 
   return (
     <div className={`space-y-6 ${className}`}>

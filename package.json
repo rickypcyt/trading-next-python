@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently --kill-others \"npm run dev:next\" \"npm run dev:backend\"",
+    "dev": "node scripts/kill-dev.mjs && concurrently --kill-others \"npm run dev:next\" \"npm run dev:backend\"",
     "dev:next": "next dev",
-    "dev:backend": "cd backend && ../.venv/Scripts/python.exe -m uvicorn app:app --host 127.0.0.1 --port 5000 --reload",
+    "dev:backend": "cd backend && ../.venv/Scripts/python.exe -m uvicorn app:app --host 127.0.0.1 --port 5000",
     "kill": "node scripts/kill-dev.mjs",
     "build": "next build",
     "start": "next start",

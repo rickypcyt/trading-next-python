@@ -1,6 +1,7 @@
 from binance import Client
 import asyncio
 import os
+from fair_odds import fair_win_probability
 import random
 import time
 from datetime import datetime, timedelta
@@ -249,52 +250,18 @@ class BinanceDataSimulator(TradingSimulator):
         return trade
     
     def _simulate_strategy_exit(self, signal, current_price: float, volatility: float) -> float:
-        """Simular precio de salida basado en la estrategia"""
+        """Salida SINTETICA sin edge: TP o SL con la probabilidad justa de un paseo aleatorio.
+
+        Antes habia probabilidades de exito inventadas (70-94%). Ahora P(TP) = dist_SL/(dist_SL+dist_TP),
+        con lo que el valor esperado antes de costos es 0. Para resultados reales ver backend/research.
+        """
+        tp, sl = signal.target_profit, signal.stop_loss
+        if tp and sl:
+            p = fair_win_probability(current_price, tp, sl)
+            return tp if random.random() < p else sl
         base_movement = max(volatility * 0.3, 0.001)
-        
-        if signal.strategy == StrategyType.MARKET_MAKING:
-            # Market making: elevamos probabilidad de fill positivo y limitamos pérdidas
-            success_probability = 0.94  # antes 0.85
-            if random.random() < success_probability:
-                # objetivo conservador para asegurar cierre en ganancia
-                return signal.target_profit or (current_price * (1 + base_movement * 0.8))
-            else:
-                # limitar drawdown en los casos negativos
-                loss_movement = base_movement * 0.4
-                return signal.stop_loss or (current_price * (1 - loss_movement))
-        
-        elif signal.strategy == StrategyType.SCALPING:
-            # Scalping: movimientos rápidos y pequeños
-            if random.random() < 0.80:  # 80% éxito
-                return signal.target_profit or (current_price * (1 + base_movement * 0.45))
-            else:
-                return signal.stop_loss or (current_price * (1 - base_movement * 0.2))
-        
-        elif signal.strategy == StrategyType.GRID_TRADING:
-            # Grid trading: alta probabilidad de ejecución
-            if random.random() < 0.93:  # 93% éxito
-                return signal.target_profit or (current_price * (1 + base_movement * 0.9))
-            else:
-                return signal.stop_loss or (current_price * (1 - base_movement * 0.6))
-        
-        elif signal.strategy == StrategyType.MEAN_REVERSION:
-            # Mean reversion: éxito basado en reversión a la media
-            if random.random() < 0.85:  # 85% éxito
-                return signal.target_profit or current_price
-            else:
-                return signal.stop_loss or (current_price * (1 - base_movement * 1.0))
-        
-        elif signal.strategy == StrategyType.BREAKOUT_MOMENTUM:
-            # Breakout: menor probabilidad pero mayores ganancias
-            if random.random() < 0.70:  # 70% éxito
-                return signal.target_profit or (current_price * (1 + base_movement * 1.8))
-            else:
-                return signal.stop_loss or (current_price * (1 - base_movement * 0.6))
-        
-        else:
-            # Default
-            return current_price * (1 + random.uniform(-base_movement, base_movement))
-    
+        return current_price * (1 + random.uniform(-base_movement, base_movement))
+
     def _get_strategy_duration(self, strategy: StrategyType) -> float:
         """Obtener duración típica por estrategia"""
         durations = {

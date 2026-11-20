@@ -20,11 +20,23 @@ for (const port of ports) {
         .filter(line => /^\d+$/.test(line));
 
       for (const pid of [...new Set(pids)]) {
-        try {
-          execSync(`taskkill /F /PID ${pid}`);
-          console.log(`Killed process ${pid} on port ${port}`);
-        } catch {
-          // ignore already closed
+        // Con `uvicorn --reload` en Windows, el dueño reportado del puerto puede estar ya muerto
+        // mientras su hijo huérfano sigue ocupando el socket. Matamos también a los hijos directos.
+        const children = execSync(
+          `powershell -Command "Get-CimInstance Win32_Process -Filter 'ParentProcessId=${pid}' | Select-Object -ExpandProperty ProcessId"`,
+          { encoding: 'utf8' }
+        )
+          .split(/\r?\n/)
+          .map(line => line.trim())
+          .filter(line => /^\d+$/.test(line));
+
+        for (const target of [...children, pid]) {
+          try {
+            execSync(`taskkill /F /T /PID ${target}`, { stdio: 'ignore' });
+            console.log(`Killed process ${target} (port ${port}${target === pid ? '' : `, child of ${pid}`})`);
+          } catch {
+            // ya estaba cerrado
+          }
         }
       }
     } else {
@@ -35,3 +47,6 @@ for (const port of ports) {
     console.error(`Could not kill port ${port}:`, err.message);
   }
 }
+
+// Dar un momento a Windows para liberar los sockets antes de que arranque el servidor.
+await new Promise(resolve => setTimeout(resolve, 1000));

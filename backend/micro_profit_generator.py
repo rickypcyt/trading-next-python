@@ -1,4 +1,5 @@
 import asyncio
+from fair_odds import fair_win_probability
 import random
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
@@ -131,7 +132,7 @@ class MicroProfitGenerator:
         # Observar precio real tras un breve lapso para decidir resultado
         await asyncio.sleep(0.2)
         latest_price = await self._get_current_price(symbol)
-        success_probability = min(0.85 + (market_condition['confidence'] * 0.1), 0.97)
+        success_probability = fair_win_probability(entry_price, exit_price, stop_loss)
         
         if latest_price:
             if direction == 'long':
